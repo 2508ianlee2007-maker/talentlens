@@ -544,16 +544,18 @@ with tab_res:
             verdict, vcls = verdict_label(best["score"])
             color   = score_color(best["score"])
             rec     = extract_recommendation(best.get("output", ""))
+            small_open = '<small style="opacity:0.8">'
+            small_close = '</small>'
+            summary_html = f"{small_open}{best['summary']}{small_close}" if best.get("summary") else ""
             st.markdown(
                 f'<div class="card-hero">'
                 f'<span class="best-badge">⭐ Best Match</span>&nbsp;&nbsp;{rec_badge(rec)}<br>'
                 f'<span style="font-size:1.4rem;font-weight:800">{fmt_name(best["cv_name"])}</span>'
                 f'&nbsp;<span style="opacity:0.5;font-size:0.9rem">Score: <span style="color:{color};font-weight:700">{best["score"]}/10</span></span><br>'
                 f'<span class="verdict {vcls}">{verdict}</span><br>'
-                f'{"<small style=\'opacity:0.8\'>" + best["summary"] + "</small>" if best.get("summary") else ""}'
+                f'{summary_html}'
                 f'</div>', unsafe_allow_html=True
             )
-
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CVs Shown",     len(filtered))
             m2.metric("Best Score",    f"{max(scores):.1f}/10" if scores else "—")

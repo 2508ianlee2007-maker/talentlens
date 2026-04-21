@@ -1,0 +1,59 @@
+   
+Contact
+Atlas Starforge
+Top Skills
+RTL Coding
+RTL Verification
+RTL Development
+Languages
+English
+Staff Design Verification
+Ho Chi Minh City Metropolitan Area
+Experience
+BOS Semiconductors
+Staff Design Verification Engineer
+December 2022 - Present  (1 year)
+HCL Technologies
+Technical Lead
+March 2022 - December 2022  (10 months)
+RTL design for clock controller, power control, clock and power hardmacro
+integration.
+Integration system control block in cpu sub-system.
+RTL verification system control.
+Clock structure, SDC for system control block.
+Ampere
+Sr. Verification Engineer
+December 2020 - August 2021  (9 months)
+Renesas Design Vietnam Co., Ltd.
+4 years 7 months
+Staff Engineer
+July 2019 - September 2020  (1 year 3 months)
+Sr. Verification Engineer
+March 2016 - June 2019  (3 years 4 months)
+ICDREC
+Verification Engineer
+May 2014 - February 2016  (1 year 10 months)
++ VMM Methodology.
++ RTL/SDF simulation
++ Formalilty Checking/Analyzing
++ DFT-DRC
++ STA: AC-Timing
++ AXI/AHB/APB
+  Page 1 of 2   
+Renesas Design Vietnam Co., Ltd.
+Hardware Design Engineer
+March 2010 - May 2013  (3 years 3 months)
+Tan Thuan EPZ, Dist 7, Ho Chi Minh city
++ RTL/SDF simulation.
++ Formal verification
++ STA : AC-Timing.
++ DFT-DRC
++ Synthesis
++ Design
++ FPGA
++ AHB/APB
+Education
+Technical Education University of Ho Chi Minh City
+Bachelor's Degree, Electrical and Electronics Engineering  · (2005 - 2010)
+University of Technical Education Ho Chi Minh City
+  Page 2 of 2

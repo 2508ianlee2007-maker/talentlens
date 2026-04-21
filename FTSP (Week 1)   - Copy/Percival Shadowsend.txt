@@ -1,0 +1,96 @@
+My colleagues called me the “challenge  
+engineer”  because  I am often  in charge  hard 
+design. I think with my high spirit, I  can do 
+more to contribute for business of  company  
+which  I work  at. 
+Short  term : Continue  challeng ing myself .  
+Use my experience to contribute for  
+company.  
+Long  term : Became  the higher -level  engineer. 
+I’m ready  for new thing and persistent to follow 
+my goals.  Objective  
+University of Information Technology 
+(September 2013 – June 2018)  
+ 
+o Faculty of Computer  Engineering  
+o Major:  IC design  
+o GPA:  7.54/10 
+o Language:  English  with 4 skills  Education   
+ Percival Shadowsend  
+Physical  design  engineer  
+o Address:  Block 21, Ghim Mod Road, Singapore, 270021  
+o Phone /WhatsApp : +85 82535051  
+o Mail : batruc28@gmail.com  
+  Experience with R -Car 28nm, 12nm  TSMC , Mobile 6nm, 5nm, 4nm  TSMC, BTC 6nm SMIC, BTC 4nm 
+Samsung, BTC 3nm . Completed full y Physical Design flow from Netlist to GDS with hard design  and had 
+some experience s to manage member in team . Worked on both Synopsys and  Candance tool. Experience  
+congestion, timing, routing, physical verification, IR  drop, …  
+Overview  
+Technical  
+o Knowledge  about  Layout,  design  flow,  EDA  
+tool. 
+o Knowledge  about  computer,  hardware.  
+o Linux , Tcl, Awk, Perl.  
+ 
+Soft skill 
+o Teamwork.  
+o Communication.  
+o Establish  good  relationship.  
+o Sport  skills  (athlete  shuttlecock  kicking),  
+badminton     with high level.  Skill  
+✓ Student  with five best things  at UIT 
+(2015).  
+✓ Sunflower Mission  Scholarship  (2016 , 2017)  
+✓ Top 5 the National round of the 12th 
+annual  international  microelectronics  
+Olympiad  of Armenia  (2017)  
+✓ TJ Park Foundation  Scholarship  – 
+Korean  (2017)  Honors  & Awards  
+Activity  and experience  
+ 
+ March  2017  – December 2017:  Trainee  Physical Design in Renesas  Design Vietnam   
+❖ Do in ECO phase to check new function of Primetime tool (Physical aware apply 
+ECO)  
+❖ RCar product TSMC 28nm and AMCU TSMC 28nm on ICC and ICC2.,  
+  
+ June  2018  – November 2020 : Physical Design  Engineer  in Renesas Design Vietnam   
+❖ From  June  2018  – August  2019: Project 1  
+- 1 Sub blocks ( 4.7 M instance  + Analog macro inside ) (RCar  product  TSMC 12nm).  
+- 1 Sub Blocks (1M instance) (RCar  product  TSMC 12nm).  
+ 
+❖ From  September  2019  – March  2020: Project 1  
+- whole IP (27M instances): 3 levels  (TOP IP > MAIN IP > 6 Subblocks )  
+- Run PNR, STA, PV, Checker:  LEC, HLDRC,  … 
+- RCar  product  TSMC 12nm.  
+ 
+❖ From  March  2020  – November 2020: Project 2  
+- TOP IP (6M instance  + Analog macros inside ) (RCar product TSMC 7nm)  
+           
+ November 2020 – December 2022 : Physical Design  Engineer at MediaTek  Singapore   
+❖ From November 2020 - March  2021:  Project 1  
+- 1 MACRO (~1M instances , f~1.1 GHz ) (Mobile TSMC 6nm)  
+ 
+❖ From April 2021 – May 2021: Project 1  
+- Group leader:  Continue with one MACRO, one more TOP Block and manag e one Block.  
+- Mobile TSMC 6 nm . 
+ 
+❖ From May 2021 – Dec 2021: Project 2   
+- Group leader:  in charge of  one Block and manage 1 Block.  
+- Mobile product TSMC 5 and 4 nm.  
+ 
+ Apr 2022 – Now:  Physical Design Engineer at CANAAN Singapore  
+❖ From Apr 2022 – Dec 2022: Project  1 
+- 4/8 Blocks (BTC SMIC 6nm)  
+ 
+❖ From Dec 2022 – Apr 2023:  Project 2  
+- In charge 4/8 Blocks ( BTC Samsung 4nm ) 
+- Support 1 Blocks in another team (BTC Samsung 4nm)  
+- Experience with Power/GPIO of Samsung and Synopsys placement and special routing.  
+- Experience with Effuse, VT sensor, PLL of Samsung placement and special routing.  
+- Support debugging  and enhance PNR flow for all designs . 
+ 
+❖ From Apr 2023 – Now: Project 3  
+- Support develops  power planning and boundary cell insert ion scripts.  
+- Compare the power and leakage of LTV and RVT.  
+- On going with 3nm.  
+ 

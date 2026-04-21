@@ -1,0 +1,47 @@
+   
+Coordonnées
+Juniper Moonbeam 
+Principales compétences
+C++
+Verilog
+FPGA
+Languages
+English  (Limited Working)
+Design Verification Leader
+Viêt Nam
+Expérience
+CoAsia SEMI Vietnam Co., Ltd
+RTL Design Verification Leader
+octobre 2020 - Present  (3 ans 2 mois)
+Hanoi, Hanoi, Vietnam
+#Verification #RTLDesign #UVM #SystemVerilog #ASIC #SOC #LPDDR4/5
+#NoC #IWB #VIP
+FPT Software
+Hardware Engineer - FPT Global Automative - LSI division
+août 2015 - septembre 2020  (5 ans 2 mois)
+Hoa Lac Hi-Tech Park
+.Apr 2019 - Sept 2020: Hardware Verification Engineer
+- Verify top-level for a chip "Secure car access" solution of TOP1 automotive
+chip maker #UVM #SystemVerilog #SCA #RF
+.Feb 2019 - March 2020: Hardware HLS Verification/Design Engineer
+- Modeling/HLS Design/Verification for HDR tone mapping algorithm
+(combine local, global and multi tone mapping)  #HLS #Stratus #Cadence
+#HighLevelSynthesize #SystemC #ImageProcessing
+.Apr 2016 - Dec 2018:Hardware Modeling Engineer
+- Develop virtual platform for Automotive ECU (TOP 3 automotive chip maker)
+with various IPs core, bus system (AXI, AHB, APB, HSIF, . . .)
+- Project management: Manage a team with 8 members. PMF certificate at
+www.stevbros.edu.vn
+- #C++ #SystemC #UML #ComputerArchitecture #Python
+.Oct 2015 - Apr 2016: Researcher
+- Researched and developed a "place and route algorithm" for a field-
+programmable analog array architecture (FPAA chip) #MATLAB #C #C++
+.Apr 2015 - Oct 2015: Hardware Design Engineer
+- Developed H264 Decoder IP-core: NAL parser and Motion estimation block
+#SystemVerilog #FPGA
+  Page 1 of 2   
+Formation
+Hanoi university of sciense and technology
+Engineer’s Degree, Electrical, Electronic and Communications Engineering
+Technology/Technician  · (2010 - 2015)
+  Page 2 of 2

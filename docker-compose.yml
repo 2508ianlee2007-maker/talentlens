@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  talentlens:
+    build: .
+    container_name: talentlens
+    ports:
+      - "8501:8501"
+    environment:
+      # Optional: pre-fill the Groq key so you don't have to paste it in the UI
+      # Uncomment and set your key, or pass it via a .env file
+      # GROQ_API_KEY: "your_groq_api_key_here"
+
+      # Hugging Face cache — keeps the model on the host so it's not
+      # re-downloaded every time you rebuild the image
+      TRANSFORMERS_CACHE: /cache/transformers
+      HF_HOME: /cache/hf
+
+    volumes:
+      # Persist the HuggingFace model cache between container restarts
+      - hf_cache:/cache
+
+    restart: unless-stopped
+
+volumes:
+  hf_cache:

@@ -1,0 +1,102 @@
+   
+Contact
+Seraphina Wildwood 
+Top Skills
+Very-Large-Scale Integration (VLSI)
+System on a Chip (SoC)
+Innovus
+Physical design engineer with various experiences in VLSI
+Singapore
+Summary
+Experienced Semiconductor Engineer specializing in Backend digital
+design who spent his early career of 4 years in Intel and learned
+most of the clock architecture and planning for CPU design. I have
+experience in designing clock mesh with spice simulation and top
+clock distribution with specially designed strong buffers. On top of
+that, I was able to analyze the timing report and modify the top clock
+in order to improve the timing QoR which greatly reduce the effort
+needed for the physical design engineer who was responsible for the
+APR flow. 
+Currently, I worked for Mediatek for 2 years and still counting. My
+daily basis is the physical design of the chip and specifically working
+on APR and top flow. My responsibility is to convert some logic
+relation ( RTL/ Netlist) into physical form ( GDS). In detail, the timing,
+power, DRC, ESD, and ERC quality are part of my job to ensure
+it stays in a healthy state. Besides that, I am experienced in top
+partition planning, which included the shaping of the partition, the
+channel estimation for signals, and controlling the number of feed-
+throughs for each partition. The top flow or the partition flow required
+rich experience in order to solve the floorplan issue from the very
+beginning of the project.
+I am a quick learner who is able to catch up on new tasks in a
+short period and perform it with the least mistakes. With that, I am
+a curious person who is willing to spend extra effort in analyzing,
+understanding, testing, observing, and making a conclusion for new
+tasks I face. To me, keep learning is the way to improve.
+Experience
+MediaTek
+Staff Engineer
+November 2020 - August 2023  (2 years 10 months)
+Singapore
+  Page 1 of 3   
+Physical design engineer who guides the team's junior in any APR-related
+problems/questions.
+Related experiences are guiding interns in finishing a digital macro, and new
+hires in converging partition timing and DRCs. 
+On top of that, the top's floorplan, block shape, and channel estimation are part
+of the daily work basis. 
+In order to drive the team into the project closure, a strong physical design
+concept is needed when doing the mentioned planning and it is meant to
+prevent/reduce any underlying issues ahead. 
+The following are the projects involved so far:
+1) Power management IC ( UMC 153) 
+2) Tablet CPU chip ( N6) 
+3) Modem IP ( N6 ) 
+4) 2 x RF chip ( N12)
+Intel Corporation
+4 years 5 months
+SoC Design Engineer
+September 2017 - October 2020  (3 years 2 months)
+Penang, Malaysia
+Top clock distribution using clock mesh, super buffer, and custom scripts in
+estimating, controlling, and delivering the top clock network for the projects. 
+Responsible for topology planning, clock port strategic location planning, top
+clock latency controls, physical verification, and signoff simulation which focus
+on the clock skews. 
+IP involved: 
+1) PCIE 4 lanes and 8 lanes 
+2) ISP ( top clock with H tree and super buffer)
+Graduate Trainee as SoC Design Engineer
+June 2016 - September 2017  (1 year 4 months)
+Penang, Malaysia
+Top clock distribution using clock mesh for Intel 14nm project. 
+As a member of a new team on Penang's site, spent most of the effort in
+adopting the technology in topology planning, physical implementation, and
+timing verification ( skew and latency ) using spice simulation. 
+Able to learn and implement concurrently during the project and made no
+mistakes in delivering the design.
+Tunku Abdul Rahman University College
+  Page 2 of 3   
+Parttime Tutor
+June 2020 - September 2020  (4 months)
+Malaysia
+Involved in guiding students to learn and understand information technology
+from hardware to software. 
+Victory Mark Technology Sdn. Bhd.
+Product Engineer
+September 2015 - April 2016  (8 months)
+Kuala Lumpur, Malaysia
+-Prepare firmware for the products
+-Provide after sale service to client
+Education
+Universiti Teknologi Malaysia
+Master of Engineering - MEng, Computer And Microelectronic
+Systems  · (2016 - 2018)
+Tunku Abdul Rahman University College
+Bachelor of Science (Honours), Microelectronics with Embedded
+Technology  · (2013 - 2015)
+Tunku Abdul Rahman University College
+Diploma in Science, Microelectronics and Physics  · (2011 - 2013)
+SMJK Poi Lam
+Sijil Pelajaran Malaysia (SPM), Pure Science  · (2006 - 2010)
+  Page 3 of 3

@@ -1,0 +1,103 @@
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+        
+                                                                                  
+       
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+      
+Contact  
+Education  +91 8793872678  
+mpnagarnaik@gmail.com  
+Bengaluru, India  
+B.E. in Electronics and Communication 
+Engineering  
+• College:  RCOEM, Nagpur  
+• Year of Passing:  2018  
+• CGPA:  8.53 
+Skills 
+• Programming languages :  
+C, Verilog HDL, System Verilog, UVM, 
+Perl Scripting  
+• Tools:  
+Synopsys VCS, Verdi, DVE  
+Language  
+• English, Marathi , Hindi  Senior Engineer (Design Verification), Cerium Systems  
+June’2018 – Present  
+ 
+Project Details  
+A. IP_COE, Client: Intel, ongoing [since Jan 2021]  
+Improvise regression results of legacy Ethernet IP’s and verification of new 
+features added in RTL by customer requirement . 
+Roles & Responsibility:  
+• Responsible for handling many legacy ethernet IP’s . 
+• Worked on many Customers  and internal HSD’s. Helped to find  out root cause  
+and report the issues to Design team and updated the testbench if required.  
+• Ported few legacy IP verification  setup s to UVM based GDR TB to verify F-tile 
+ported  IP’s. Supported  design team by spotting critical bugs by debugging issues 
+using DVE/Verdi  tools. 
+• Worked on regression fai lure debugs and coverage analysis to meet client 
+expectations.  
+• Worked on ICQ porting, compliance testcases and sim compliance . 
+ 
+B. GDR, Client: Intel, [March 2020 -Jan2021]  
+Verification and development of GDR F -tile IP  with the help of UVM based TB. 
+Roles & Responsibility:  
+• Complete ownership of TILE IP flow setup in DV for speed variants 100G, 25G 
+with the help of design team.  
+• Sanity clean-up and other regression debugs for 25G.  
+• Worked on IP parameter deploy using Perl based  ITF script.  
+• Supported team in testbench modifications to be aligned with RTL 
+developments.  
+ 
+C. PIPE ACDS, Client: Intel, [Dec 2018 - March 2020]  
+Verification of RTL by means of specifications provided for an IP and Ethernet 
+Protocol for different crete’s (c3, c2) and SIP block for 100G and 40G  using 
+UVM Testbench.  
+Roles & Responsibility:  
+• Regression debugs of different blocks - C3, C2, DR, SIP according to Functional 
+Spec as well IEEE document.  
+• Sequence porting and testbench modifications in case of new feature addition or 
+RTL modifications . 
+• Synced with RTL designers and Synop sys team to meet expected functionalities 
+and to achieve maximum regression results .  Professional Experience  Monika Nagarnaik  
+ 
+IP Verification Engineer with 5+ years of professional experience 
+in Ethernet.  
+Strengths  
+• Hard Working and Dedication towards 
+Work  
+• Quick Learning  
+• Good Team Player  
+• Honesty and Integrity  
+ 
+Achievement  
+• “Pat On Back” Award for PSG IP COE 
+Project  
+• “AWARD OF EXCELLENCE” for work 
+done in  PSG PIPE ACDS Project  
+ 

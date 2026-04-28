@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.env
+faiss_index/
+
+# Old code versions — not needed in the image
+1. codes/
+2. weekly report/
+FTSP (Week 1) - Copy/
+templates/
+
+# Large binary files
+*.zip
+*.mp4
+*.pptx
+*.xlsx
+*.jpeg
+*.jpg
+*.png
+
+# Docker local files — not needed inside the container
+docker-compose.yml
+.dockerignore
+
+# Misc
+*.pdf
+Gantt_Target_vs_Actual.xlsx

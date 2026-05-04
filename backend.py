@@ -13,6 +13,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
+VERSION = "v2.1-chat-fix"  # bump this when you redeploy to confirm Render picked up the new file
+
 QWEN_MODEL = "qwen/qwen3-32b"
 FINAL_CHUNK_SIZE = 700
 FINAL_CHUNK_OVERLAP = 175
@@ -341,57 +343,85 @@ def screen_candidates(
 
 
 def build_chat_context(raw_jd_texts, raw_cv_texts, results) -> str:
+    """Build a context string kept well under ~2 000 tokens so the full chat
+    request (system + context + history + user question) stays inside Groq's
+    free-tier per-request limit (~6 000 TPM / ~32 000 token context window).
+    Rough budget: context ≤ 1 800 tokens ≈ 7 200 characters."""
+
+    MAX_SUMMARY = 120   # chars per field
+    MAX_SKILLS  = 100
+    MAX_GAPS    = 100
+
     ctx = ""
-    # JD names only — raw text is too long for the free tier TPM limit
+
     if raw_jd_texts:
         ctx += "=== JOB DESCRIPTIONS LOADED ===\n"
         for name in raw_jd_texts:
             ctx += f"  - {name}\n"
-    # CV names only
+
     if raw_cv_texts:
         ctx += "\n=== CANDIDATE CVs LOADED ===\n"
         for name in raw_cv_texts:
             ctx += f"  - {name}\n"
-    # Full screening results with scores, verdicts, summaries, skills, gaps
+
     if results:
         ctx += "\n=== SCREENING RESULTS ===\n"
         for jd_name, rows in results.items():
-            ctx += f"\nJob Description: {jd_name}\n"
+            ctx += f"\nJD: {jd_name}\n"
             for row in rows:
+                score_str = f"{row['score']}/10" if row['score'] is not None else "N/A"
+                verdict   = verdict_label(row['score'])[0]
                 ctx += (
-                    f"  Candidate: {Path(row['cv_name']).stem} | "
-                    f"Score: {row['score']}/10 | "
-                    f"Verdict: {verdict_label(row['score'])[0]}\n"
+                    f"  [{score_str} | {verdict}] "
+                    f"{Path(row['cv_name']).stem}\n"
                 )
                 if row.get("summary"):
-                    ctx += f"    Summary: {(row['summary'] or '')[:200]}\n"
+                    ctx += f"    Summary: {(row['summary'] or '')[:MAX_SUMMARY]}\n"
                 if row.get("skills"):
-                    ctx += f"    Skills: {(row['skills'] or '')[:150]}\n"
+                    ctx += f"    Skills:  {(row['skills']  or '')[:MAX_SKILLS]}\n"
                 if row.get("gaps"):
-                    ctx += f"    Gaps: {(row['gaps'] or '')[:150]}\n"
+                    ctx += f"    Gaps:    {(row['gaps']    or '')[:MAX_GAPS]}\n"
+
     return ctx.strip()
 
 
 def ask_about_candidates(groq_key: str, context: str, question: str, chat_history=None) -> str:
+    """Send a chat question to the LLM, keeping the total request size safe for
+    Groq's free tier.  Strategy:
+      - Context is already capped by build_chat_context (~1 800 tokens).
+      - We keep only the last 6 turns of chat history to avoid runaway growth.
+      - max_tokens is set to 1 024 — enough for a thorough answer while leaving
+        room in the 6 000 TPM budget for the prompt itself.
+      - /nothink suffix disables Qwen-3's hidden chain-of-thought, preventing
+        hundreds of extra tokens from being generated silently.
+    """
     if not groq_key or not groq_key.strip():
         raise ValueError("Groq API key is required.")
+
     client = Groq(api_key=groq_key.strip())
+
     messages = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT}]
     if context:
         messages.append({"role": "system", "content": f"Context:\n{context}"})
-    for item in (chat_history or []):
-        role = item.get("role")
+
+    # Keep only the last 6 exchanges (12 messages) to cap history size
+    recent_history = (chat_history or [])[-12:]
+    for item in recent_history:
+        role    = item.get("role")
         content = item.get("content", "")
         if role in {"user", "assistant"} and content:
             messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": question})
+
+    # Append /nothink to suppress hidden reasoning tokens on Qwen-3
+    messages.append({"role": "user", "content": question.rstrip() + " /nothink"})
+
     response = client.chat.completions.create(
         model=QWEN_MODEL,
         messages=messages,
         temperature=0.2,
-        max_tokens=4096,  # raised from 700 — reasoning models need room for hidden thinking tokens
+        max_tokens=1024,
     )
     raw = response.choices[0].message.content
-    # Strip <think>...</think> blocks before returning so hidden reasoning never reaches the UI
+    # Strip any <think>...</think> blocks just in case
     clean = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE).strip()
     return clean

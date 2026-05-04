@@ -46,7 +46,7 @@ gatherUsageStats = false\n\
 EXPOSE 10000
 
 # Health-check so Render knows when the app is ready
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=5 \
     CMD curl -f http://localhost:10000/_stcore/health || exit 1
 
 ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=10000", "--server.address=0.0.0.0"]

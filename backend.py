@@ -13,7 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
-VERSION = "v2.1-chat-fix"  # bump this when you redeploy to confirm Render picked up the new file
+VERSION = "v3.0-improvements"  # bump this when you redeploy to confirm Render picked up the new file
 
 QWEN_MODEL = "qwen/qwen3-32b"
 FINAL_CHUNK_SIZE = 700
@@ -270,17 +270,109 @@ def _get_rag_context(chunks, emb, cv_name: str, query: str) -> str:
     return "\n\n".join(d.page_content for d in retriever.invoke(query))
 
 
-def _call_llm(client: Groq, prompt: str) -> str:
-    response = client.chat.completions.create(
-        model=QWEN_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.1,
-        max_tokens=1024,
-    )
-    return response.choices[0].message.content
+def _call_llm(client: Groq, prompt: str, retries: int = 3, base_delay: float = 5.0) -> str:
+    """Call the LLM with exponential backoff retry on rate-limit or server errors."""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            response = client.chat.completions.create(
+                model=QWEN_MODEL,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=1024,
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            last_err = e
+            err_str = str(e).lower()
+            # Only retry on rate limits or server errors, not auth/bad request
+            if any(code in err_str for code in ["429", "500", "503", "rate_limit", "timeout"]):
+                wait = base_delay * (2 ** attempt)  # 5s, 10s, 20s
+                time.sleep(wait)
+            else:
+                raise  # non-retryable error, fail immediately
+    raise RuntimeError(f"LLM call failed after {retries} retries: {last_err}")
+
+
+# ── ANONYMISATION ─────────────────────────────────────────────────────────────
+# Common name prefixes / titles to strip
+_NAME_TITLES = re.compile(
+    r"\b(mr|mrs|ms|miss|dr|prof|sir)\.?\s+", re.IGNORECASE
+)
+# Universities / schools — strip "University of X", "X University", "X College"
+_UNIVERSITY = re.compile(
+    r"\b[\w\s]+(university|college|institute of technology|polytechnic)\b[\w\s]*",
+    re.IGNORECASE,
+)
+# Email addresses
+_EMAIL = re.compile(r"[\w.\-+]+@[\w.\-]+\.[a-z]{2,}", re.IGNORECASE)
+# Phone numbers
+_PHONE = re.compile(r"(\+?\d[\d\-\(\) ]{7,}\d)")
+# LinkedIn / GitHub / personal URLs
+_URL = re.compile(r"https?://\S+|www\.\S+|linkedin\.com/\S+|github\.com/\S+", re.IGNORECASE)
+# Gendered pronouns
+_PRONOUNS = re.compile(
+    r"\b(he|him|his|she|her|hers|himself|herself)\b", re.IGNORECASE
+)
+# Common first-name patterns: capitalised word after "Name:", "Candidate:", at line start
+_PROPER_NAME = re.compile(r"\b([A-Z][a-z]{1,14})\s+([A-Z][a-z]{1,20})\b")
+
+
+def anonymise_text(text: str) -> str:
+    """Strip PII from a CV so the LLM scores on skills alone, not identity."""
+    text = _EMAIL.sub("[email]", text)
+    text = _PHONE.sub("[phone]", text)
+    text = _URL.sub("[url]", text)
+    text = _NAME_TITLES.sub("", text)
+    text = _PRONOUNS.sub("they", text)
+    text = _UNIVERSITY.sub("[University]", text)
+    text = _PROPER_NAME.sub("[Candidate]", text)
+    return text
+
+
+# ── INPUT VALIDATION ──────────────────────────────────────────────────────────
+MIN_CV_CHARS  = 200   # anything shorter is probably a blank/corrupt file
+MIN_JD_CHARS  = 100
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+
+
+def validate_uploads(jd_uploads, cv_uploads):
+    """Return a list of warning strings. Empty list = all good."""
+    warnings = []
+
+    # Check for empty upload slots
+    if not jd_uploads:
+        warnings.append("No Job Description files uploaded.")
+    if not cv_uploads:
+        warnings.append("No CV files uploaded.")
+    if not jd_uploads or not cv_uploads:
+        return warnings  # no point checking further
+
+    # Duplicate filenames within each slot
+    jd_names = [f.name for f in jd_uploads]
+    cv_names = [f.name for f in cv_uploads]
+    for name in set(n for n in jd_names if jd_names.count(n) > 1):
+        warnings.append(f"Duplicate JD file: '{name}' uploaded more than once.")
+    for name in set(n for n in cv_names if cv_names.count(n) > 1):
+        warnings.append(f"Duplicate CV file: '{name}' uploaded more than once.")
+
+    # Same filename uploaded in both slots (JD and CV)
+    cross = set(jd_names) & set(cv_names)
+    for name in cross:
+        warnings.append(f"'{name}' was uploaded as both a JD and a CV — is that intentional?")
+
+    # File size
+    for f in jd_uploads + cv_uploads:
+        size = f.size if hasattr(f, "size") else len(f.getbuffer())
+        if size == 0:
+            warnings.append(f"'{f.name}' appears to be empty (0 bytes).")
+        elif size > MAX_FILE_SIZE:
+            warnings.append(f"'{f.name}' is larger than 5 MB — consider splitting it.")
+
+    return warnings
 
 
 def screen_candidates(
@@ -288,6 +380,7 @@ def screen_candidates(
     cv_files: Dict[str, str],
     groq_key: str,
     use_rag: bool = True,
+    anonymise: bool = False,
     delay: int = 1,
     progress_callback=None,
 ) -> Dict[str, List[Dict[str, Any]]]:
@@ -299,16 +392,23 @@ def screen_candidates(
         raise ValueError("No CV files loaded.")
 
     groq_client = Groq(api_key=groq_key.strip())
-    chunks = _build_chunks(cv_files) if use_rag else []
+
+    # Apply anonymisation to CV text before chunking/screening if requested
+    processed_cv_files = (
+        {name: anonymise_text(text) for name, text in cv_files.items()}
+        if anonymise else cv_files
+    )
+
+    chunks = _build_chunks(processed_cv_files) if use_rag else []
     emb = get_embedding_model() if use_rag else None
 
-    total_pairs = max(len(jd_files) * len(cv_files), 1)
+    total_pairs = max(len(jd_files) * len(processed_cv_files), 1)
     step = 0
     all_results = {}
 
     for jd_name, cleaned_jd in jd_files.items():
         jd_res = []
-        for cv_name, cleaned_cv in cv_files.items():
+        for cv_name, cleaned_cv in processed_cv_files.items():
             step += 1
             if progress_callback:
                 progress_callback(step, total_pairs, jd_name, cv_name)
@@ -331,7 +431,7 @@ def screen_candidates(
                 "summary": extract_section(output, ["Candidate Summary"]),
                 "skills": extract_section(output, ["Matching Skills"]),
                 "gaps": extract_section(output, ["Missing / Weak Areas", "Missing Areas", "Weak Areas"]),
-                "mode": "RAG" if use_rag else "Direct",
+                "mode": ("RAG" if use_rag else "Direct") + (" · Anon" if anonymise else ""),
             })
             if delay:
                 time.sleep(delay)
@@ -385,7 +485,42 @@ def build_chat_context(raw_jd_texts, raw_cv_texts, results) -> str:
     return ctx.strip()
 
 
-def ask_about_candidates(groq_key: str, context: str, question: str, chat_history=None) -> str:
+def generate_shortlist_email(
+    groq_key: str,
+    candidate_name: str,
+    job_title: str,
+    company_name: str = "our company",
+    extra_notes: str = "",
+) -> str:
+    """Generate a professional interview invitation email for a shortlisted candidate."""
+    if not groq_key or not groq_key.strip():
+        raise ValueError("Groq API key is required.")
+
+    client = Groq(api_key=groq_key.strip())
+    prompt = (
+        f"Write a professional, warm interview invitation email to a candidate.\n\n"
+        f"Candidate name: {candidate_name}\n"
+        f"Job title: {job_title}\n"
+        f"Company: {company_name}\n"
+        f"Extra notes for personalisation: {extra_notes or 'None'}\n\n"
+        f"The email should:\n"
+        f"- Have a subject line on the first line starting with 'Subject: '\n"
+        f"- Be concise (under 200 words)\n"
+        f"- Sound human and warm, not robotic\n"
+        f"- Ask them to reply with their availability for an interview\n"
+        f"- Leave placeholders like [Interviewer Name] and [Company Email] where needed\n"
+        f"- NOT include any commentary before or after the email\n"
+        f" /nothink"
+    )
+
+    response = client.chat.completions.create(
+        model=QWEN_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.4,
+        max_tokens=400,
+    )
+    raw = response.choices[0].message.content
+    return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE).strip()
     """Send a chat question to the LLM, keeping the total request size safe for
     Groq's free tier.  Strategy:
       - Context is already capped by build_chat_context (~1 800 tokens).

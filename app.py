@@ -745,9 +745,18 @@ with tab_chat:
         for idx, q in enumerate(quick_prompts):
             with cols[idx % 3]:
                 if st.button(q, use_container_width=True, key=f"qp_{idx}"):
-                    st.session_state.chat_history.append({"role": "user", "content": q})
+                    st.session_state["_queued_prompt"] = q
+
+        # Process any queued prompt (from quick buttons or elsewhere)
+        if st.session_state.get("_queued_prompt"):
+            q = st.session_state.pop("_queued_prompt")
+            st.session_state.chat_history.append({"role": "user", "content": q})
+            with st.chat_message("user"):
+                st.markdown(q)
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking…"):
                     run_chat_llm(q)
-                    st.rerun()
+                st.markdown(st.session_state.chat_history[-1]["content"])
 
         if st.session_state.chat_history:
             st.divider()

@@ -213,78 +213,10 @@ st.markdown("""
         backdrop-filter: blur(5px);
     }
 
-    /* ══ DARK MODE — Streamlit sets data-theme="dark" on the root ══ */
-    [data-theme="dark"] [data-testid="stSidebar"],
+    /* ══ DARK MODE ══ */
     @media (prefers-color-scheme: dark) {
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0f172a 0%, #020617 100%) !important;
-            border-right: 1px solid rgba(59,130,246,0.28) !important;
-        }
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0f172a 0%, #020617 100%) !important;
-        border-right: 1px solid rgba(59,130,246,0.28) !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] * {
-        color: #e2e8f0 !important;
-        -webkit-text-fill-color: #e2e8f0 !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] h2,
-    [data-theme="dark"] [data-testid="stSidebar"] h3 {
-        color: #ffffff !important;
-        -webkit-text-fill-color: #ffffff !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] input,
-    [data-theme="dark"] [data-testid="stSidebar"] input[type="password"],
-    [data-theme="dark"] [data-testid="stSidebar"] input[type="text"] {
-        color: #ffffff !important;
-        -webkit-text-fill-color: #ffffff !important;
-        caret-color: #ffffff !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] .stTextInput input {
-        background: #0f172a !important;
-        border: 1px solid rgba(59,130,246,0.5) !important;
-        color: #ffffff !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] .stTextInput input::placeholder { color: #94a3b8 !important; }
-
-    /* File uploader — darker background, deeper pink/rose borders */
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stFileUploader"] {
-        background: rgba(30, 10, 20, 0.7) !important;
-        border: 1px solid rgba(190, 50, 100, 0.55) !important;
-        border-radius: 14px !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stFileUploader"] section {
-        background: rgba(20, 5, 15, 0.85) !important;
-        border: 1px dashed rgba(180, 50, 90, 0.5) !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stFileUploader"] *,
-    [data-theme="dark"] [data-testid="stSidebar"] [class*="uploadedFile"],
-    [data-theme="dark"] [data-testid="stSidebar"] [class*="fileName"],
-    [data-theme="dark"] [data-testid="stSidebar"] [class*="fileSize"] {
-        color: #fbcfe8 !important;
-        -webkit-text-fill-color: #fbcfe8 !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stFileUploader"] li,
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stFileUploader"] [data-testid="stFileUploaderFile"] {
-        background: rgba(15, 5, 10, 0.9) !important;
-        border: 1px solid rgba(180, 50, 90, 0.35) !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stFileUploader"] button {
-        background: rgba(150, 30, 70, 0.3) !important;
-        color: #fbcfe8 !important;
-        border: 1px solid rgba(190, 50, 100, 0.5) !important;
-    }
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stFileUploader"] svg,
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stFileUploader"] img,
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stFileUploader"] [data-testid="stFileUploaderFileIcon"] {
-        filter: brightness(0) invert(1) sepia(1) saturate(3) hue-rotate(300deg) brightness(1.55) !important;
-    }
-
-    /* Also keep the @media query as fallback */
-    @media (prefers-color-scheme: dark) {
-        [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0f172a 0%, #020617 100%) !important;
+            background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%) !important;
             border-right: 1px solid rgba(59,130,246,0.28) !important;
         }
         [data-testid="stSidebar"] * {
@@ -309,13 +241,14 @@ st.markdown("""
             color: #ffffff !important;
         }
         [data-testid="stSidebar"] .stTextInput input::placeholder { color: #94a3b8 !important; }
+
         [data-testid="stSidebar"] [data-testid="stFileUploader"] {
-            background: rgba(30, 10, 20, 0.7) !important;
-            border: 1px solid rgba(190, 50, 100, 0.55) !important;
+            background: rgba(244,114,182,0.1) !important;
+            border: 1px solid rgba(244,114,182,0.28) !important;
         }
         [data-testid="stSidebar"] [data-testid="stFileUploader"] section {
-            background: rgba(20, 5, 15, 0.85) !important;
-            border: 1px dashed rgba(180, 50, 90, 0.5) !important;
+            background: rgba(30,41,59,0.76) !important;
+            border: 1px dashed rgba(244,114,182,0.36) !important;
         }
         [data-testid="stSidebar"] [data-testid="stFileUploader"] *,
         [data-testid="stSidebar"] [class*="uploadedFile"],
@@ -326,13 +259,13 @@ st.markdown("""
         }
         [data-testid="stSidebar"] [data-testid="stFileUploader"] li,
         [data-testid="stSidebar"] [data-testid="stFileUploader"] [data-testid="stFileUploaderFile"] {
-            background: rgba(15, 5, 10, 0.9) !important;
-            border: 1px solid rgba(180, 50, 90, 0.35) !important;
+            background: rgba(30,41,59,0.92) !important;
+            border: 1px solid rgba(244,114,182,0.12) !important;
         }
         [data-testid="stSidebar"] [data-testid="stFileUploader"] button {
-            background: rgba(150, 30, 70, 0.3) !important;
+            background: rgba(244,114,182,0.18) !important;
             color: #fbcfe8 !important;
-            border: 1px solid rgba(190, 50, 100, 0.5) !important;
+            border: 1px solid rgba(244,114,182,0.34) !important;
         }
         [data-testid="stSidebar"] [data-testid="stFileUploader"] svg,
         [data-testid="stSidebar"] [data-testid="stFileUploader"] img,
@@ -415,7 +348,8 @@ _defaults = {
     "analysis_done": False,
     "files_loaded":  False,
     "anonymise":     False,
-    "uploader_key":  0,   # incrementing this forces file uploaders to visually reset
+    "shortlist":     [],       # list of cv_name strings ticked for emailing
+    "uploader_key":  0,        # incrementing this forces file uploaders to visually reset
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -426,7 +360,7 @@ def reset_all():
         st.session_state[k] = {} if k != "chat_history" else []
     st.session_state["analysis_done"] = False
     st.session_state["files_loaded"]  = False
-    st.session_state["uploader_key"] += 1   # forces file uploaders to clear
+    st.session_state["uploader_key"] += 1
     st.rerun()
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
@@ -472,6 +406,12 @@ with st.sidebar:
         if not jd_uploads or not cv_uploads:
             st.warning("⚠️ Upload at least one JD and one CV first.")
         else:
+            # ── Input validation ──
+            val_warnings = backend.validate_uploads(jd_uploads, cv_uploads)
+            if val_warnings:
+                for w in val_warnings:
+                    st.warning(f"⚠️ {w}")
+                st.stop()
             with st.spinner("Reading and preprocessing files…"):
                 loaded = backend.load_and_preprocess_files(jd_uploads, cv_uploads)
             if loaded["errors"]:
@@ -497,6 +437,16 @@ with st.sidebar:
         st.markdown('<div style="font-size:12px;margin-top:4px"><span class="status-dot dot-amber"></span>No files loaded yet</div>', unsafe_allow_html=True)
 
     st.divider()
+    st.markdown("### ⚙️ Options")
+    st.session_state.anonymise = st.toggle(
+        "🕵️ Anonymise CVs",
+        value=st.session_state.anonymise,
+        help="Strips names, emails, universities and pronouns from CVs before screening to reduce bias.",
+    )
+    if st.session_state.anonymise:
+        st.markdown('<div class="info-box">🕵️ Anonymisation ON — names, emails, universities and pronouns will be hidden from the AI.</div>', unsafe_allow_html=True)
+
+    st.divider()
     st.markdown("### 🗑️ Reset")
     st.caption("Fully wipes all loaded data and results.")
     with st.container():
@@ -506,7 +456,7 @@ with st.sidebar:
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.divider()
-    st.caption("TalentLens v5 · FAISS RAG · Qwen3-32B")
+    st.caption(f"TalentLens v5 · FAISS RAG · Qwen3-32B · backend {backend.VERSION}")
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
 tab_run, tab_res, tab_matrix, tab_chat = st.tabs(
@@ -544,6 +494,9 @@ with tab_run:
             delay = st.number_input("Delay between calls (s)", min_value=0, max_value=5, value=REQUEST_DELAY, step=1,
                                     help="Increase if you hit 429 errors.")
 
+        if st.session_state.anonymise:
+            st.markdown('<div class="info-box">🕵️ <strong>Anonymisation is ON</strong> — candidate names, emails, universities and pronouns will be stripped before the AI sees the CV.</div>', unsafe_allow_html=True)
+
         total_pairs = len(st.session_state.jd_files) * len(st.session_state.cv_files)
         st.markdown(f'<div class="info-box">Ready to screen <strong>{len(st.session_state.cv_files)} candidate(s)</strong> against <strong>{len(st.session_state.jd_files)} job description(s)</strong> — {total_pairs} API call(s) total.</div>', unsafe_allow_html=True)
 
@@ -559,6 +512,7 @@ with tab_run:
                     cv_files=st.session_state.cv_files,
                     groq_key=st.session_state.groq_key,
                     use_rag=use_rag,
+                    anonymise=st.session_state.anonymise,
                     delay=int(delay),
                     progress_callback=progress_cb,
                 )
@@ -693,6 +647,58 @@ with tab_res:
             } for i, r in enumerate(filtered)]
             st.download_button("⬇️ Download Results CSV", pd.DataFrame(rows).to_csv(index=False),
                                file_name=f"talentlens_{Path(sel_jd).stem}.csv", mime="text/csv", use_container_width=True)
+
+            # ── EMAIL SHORTLISTING ────────────────────────────────────────────
+            st.divider()
+            st.markdown("### ✉️ Email Shortlisting")
+            st.caption("Tick candidates to shortlist, then generate a personalised interview invitation email for each.")
+
+            job_title    = st.text_input("Job Title", placeholder="e.g. Senior Hardware Engineer")
+            company_name = st.text_input("Company Name", placeholder="e.g. Acme Semiconductors")
+            extra_notes  = st.text_area("Extra notes (optional)", placeholder="e.g. Remote role, 2 interview rounds, start date Q3", height=68)
+
+            shortlisted = []
+            st.markdown("**Select candidates to shortlist:**")
+            for r in filtered:
+                checked = st.checkbox(
+                    f"{fmt_name(r['cv_name'])}  —  {r['score']}/10",
+                    key=f"sl_{r['cv_name']}",
+                )
+                if checked:
+                    shortlisted.append(r["cv_name"])
+
+            if shortlisted:
+                st.markdown(f'<div class="info-box">✉️ {len(shortlisted)} candidate(s) selected for shortlisting.</div>', unsafe_allow_html=True)
+                if st.button("✉️ Generate Invitation Emails", type="primary", use_container_width=True):
+                    if not job_title.strip():
+                        st.warning("Please enter a job title first.")
+                    else:
+                        for cv_name in shortlisted:
+                            with st.spinner(f"Generating email for {fmt_name(cv_name)}…"):
+                                try:
+                                    email_text = backend.generate_shortlist_email(
+                                        groq_key=st.session_state.groq_key,
+                                        candidate_name=fmt_name(cv_name),
+                                        job_title=job_title.strip(),
+                                        company_name=company_name.strip() or "our company",
+                                        extra_notes=extra_notes.strip(),
+                                    )
+                                    lines = email_text.split("\n")
+                                    subject = ""
+                                    body_lines = []
+                                    for line in lines:
+                                        if line.lower().startswith("subject:"):
+                                            subject = line[8:].strip()
+                                        else:
+                                            body_lines.append(line)
+                                    body = "\n".join(body_lines).strip()
+
+                                    with st.expander(f"✉️ Email for {fmt_name(cv_name)}", expanded=True):
+                                        if subject:
+                                            st.markdown(f"**Subject:** {subject}")
+                                        st.text_area("Email body (copy this)", body, height=220, key=f"email_{cv_name}")
+                                except Exception as e:
+                                    st.error(f"Failed to generate email for {fmt_name(cv_name)}: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — COMPARE MATRIX

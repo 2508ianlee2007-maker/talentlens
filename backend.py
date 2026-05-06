@@ -521,8 +521,15 @@ def generate_shortlist_email(
     )
     raw = response.choices[0].message.content
     return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE).strip()
+
+def ask_about_candidates(
+    groq_key: str,
+    context: str,
+    question: str,
+    chat_history: list = None,
+) -> str:
     """Send a chat question to the LLM, keeping the total request size safe for
-    Groq's free tier.  Strategy:
+    Groq's free tier. Strategy:
       - Context is already capped by build_chat_context (~1 800 tokens).
       - We keep only the last 6 turns of chat history to avoid runaway growth.
       - max_tokens is set to 1 024 — enough for a thorough answer while leaving
@@ -542,7 +549,7 @@ def generate_shortlist_email(
     # Keep only the last 6 exchanges (12 messages) to cap history size
     recent_history = (chat_history or [])[-12:]
     for item in recent_history:
-        role    = item.get("role")
+        role = item.get("role")
         content = item.get("content", "")
         if role in {"user", "assistant"} and content:
             messages.append({"role": role, "content": content})

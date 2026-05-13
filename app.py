@@ -497,6 +497,21 @@ with tab_run:
         if st.session_state.anonymise:
             st.markdown('<div class="info-box">🕵️ <strong>Anonymisation is ON</strong> — candidate names, emails, universities and pronouns will be stripped before the AI sees the CV.</div>', unsafe_allow_html=True)
 
+            # Show anonymised CV preview for testing
+            if st.session_state.get("cv_files"):
+                show_anon_preview = st.checkbox(
+                    "🔍 Show anonymised CV preview",
+                    value=False,
+                    help="Shows the anonymised CV text that will be sent to the AI. Use this to verify PII has been removed.",
+                )
+                if show_anon_preview:
+                    st.caption("Preview of anonymised CV text (this is exactly what the LLM will receive):")
+                    for name in st.session_state.cv_files:
+                        raw = st.session_state.raw_cv_texts.get(name, "")
+                        anon_preview = backend.preprocess_text(backend.anonymise_text(raw)) if raw else "(no raw text available)"
+                        with st.expander(f"🕵️ Preview: {fmt_name(name)}"):
+                            st.code(anon_preview[:2000])
+
         total_pairs = len(st.session_state.jd_files) * len(st.session_state.cv_files)
         st.markdown(f'<div class="info-box">Ready to screen <strong>{len(st.session_state.cv_files)} candidate(s)</strong> against <strong>{len(st.session_state.jd_files)} job description(s)</strong> — {total_pairs} API call(s) total.</div>', unsafe_allow_html=True)
 
@@ -515,6 +530,7 @@ with tab_run:
                     anonymise=st.session_state.anonymise,
                     delay=int(delay),
                     progress_callback=progress_cb,
+                    raw_cv_files=st.session_state.raw_cv_texts,
                 )
                 prog.empty()
                 st.session_state.results       = all_results

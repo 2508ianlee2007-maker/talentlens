@@ -298,38 +298,157 @@ def _call_llm(client: Groq, prompt: str, retries: int = 3, base_delay: float = 5
 
 
 # ── ANONYMISATION ─────────────────────────────────────────────────────────────
-# Common name prefixes / titles to strip
-_NAME_TITLES = re.compile(
-    r"\b(mr|mrs|ms|miss|dr|prof|sir)\.?\s+", re.IGNORECASE
-)
-# Universities / schools — strip "University of X", "X University", "X College"
-_UNIVERSITY = re.compile(
-    r"\b[\w\s]+(university|college|institute of technology|polytechnic)\b[\w\s]*",
+# NOTE: anonymise_text() must be called on RAW text (before preprocess_text),
+# because preprocess_text lowercases and strips punctuation, which breaks
+# capitalised-name detection and email/URL matching.
+
+# ── Emails: standard + obfuscated variants ────────────────────────────────────
+# Catches: user@domain.com  user [at] domain [dot] com  user(at)domain.com
+_EMAIL = re.compile(
+    r"[\w.\-+]+\s*(?:@|\[at\]|\(at\)|＠)\s*[\w.\-]+\s*(?:\.|"
+    r"\[dot\]|\(dot\))\s*[a-z]{2,}",
     re.IGNORECASE,
 )
-# Email addresses
-_EMAIL = re.compile(r"[\w.\-+]+@[\w.\-]+\.[a-z]{2,}", re.IGNORECASE)
-# Phone numbers
-_PHONE = re.compile(r"(\+?\d[\d\-\(\) ]{7,}\d)")
-# LinkedIn / GitHub / personal URLs
-_URL = re.compile(r"https?://\S+|www\.\S+|linkedin\.com/\S+|github\.com/\S+", re.IGNORECASE)
-# Gendered pronouns
+
+# ── Phone numbers: international, local, spaced, dotted, bracketed ────────────
+# Catches: +65 9123 4567 | (65) 9123-4567 | 9123.4567 | 91234567 | 65-9123-4567
+_PHONE = re.compile(
+    r"(?<!\d)"                         # not preceded by digit
+    r"(\+?[\d]{1,3}[\s\-.]?)?"        # optional country code
+    r"(\([\d\s]{1,6}\)[\s\-.]?)?"     # optional area code in brackets
+    r"[\d]{3,5}"                       # first digit block (3-5 digits)
+    r"[\s\-.]"                         # separator (required to avoid ID numbers)
+    r"[\d]{3,5}"                       # second digit block
+    r"(?:[\s\-.][\d]{2,5})?"          # optional third block
+    r"(?!\d)",                         # not followed by digit
+    re.IGNORECASE,
+)
+
+# ── URLs: with or without http/https, linkedin, github, personal sites ─────────
+_URL = re.compile(
+    r"(?:https?://|www\.)\S+"
+    r"|(?:linkedin\.com|github\.com|gitlab\.com|behance\.net|"
+    r"dribbble\.com|portfolio\.|medium\.com/@?)\S*",
+    re.IGNORECASE,
+)
+
+# ── Name titles (strip before name matching) ───────────────────────────────────
+_NAME_TITLES = re.compile(
+    r"\b(mr|mrs|ms|miss|dr|prof|sir|assoc\.?\s+prof)\.?\s+",
+    re.IGNORECASE,
+)
+
+# ── ALL-CAPS names: e.g. "JOHN SMITH" or "TAN WEI MING" (2-3 words) ──────────
+_ALLCAPS_NAME = re.compile(
+    r"\b([A-Z]{2,15})(?:\s+[A-Z]{2,15}){1,2}\b"
+)
+
+# ── Title-case names: "John Smith", "Wei Ming Tan" (2-3 words) ────────────────
+# Whitelisted two-word phrases that look like names but aren't:
+_NAME_WHITELIST = re.compile(
+    r"^("
+    r"Software Engineer|Hardware Engineer|Data Scientist|Data Analyst|"
+    r"Machine Learning|Deep Learning|Computer Science|Electrical Engineering|"
+    r"Civil Engineering|Mechanical Engineering|Chemical Engineering|"
+    r"Project Manager|Product Manager|Business Analyst|Systems Engineer|"
+    r"Network Engineer|Security Engineer|Cloud Engineer|DevOps Engineer|"
+    r"Full Stack|Front End|Back End|Quality Assurance|Test Engineer|"
+    r"Research Engineer|Research Scientist|Senior Engineer|Junior Engineer|"
+    r"Team Lead|Tech Lead|Chief Executive|Chief Technology|Chief Financial|"
+    r"Vice President|Managing Director|General Manager|"
+    r"New York|San Francisco|Los Angeles|Hong Kong|Kuala Lumpur|"
+    r"South Korea|North America|South East|South Asia|"
+    r"January|February|March|April|June|July|August|September|October|"
+    r"November|December|"
+    r"Bachelor|Master|Doctor|Honours|"
+    r"National Service|Civil Service"
+    r")$",
+    re.IGNORECASE,
+)
+
+_PROPER_NAME = re.compile(
+    r"\b([A-Z][a-z]{1,20})(?:\s+[A-Z][a-z]{1,20}){1,2}\b"
+)
+
+def _safe_name_sub(m: re.Match) -> str:
+    """Replace match with [Candidate] unless it's a whitelisted phrase."""
+    if _NAME_WHITELIST.match(m.group(0).strip()):
+        return m.group(0)
+    return "[Candidate]"
+
+# ── Universities / institutions ────────────────────────────────────────────────
+# Run BEFORE name matching so "Nanyang Technological University" is caught whole.
+# The pattern grabs any leading title-case words before the keyword.
+_UNIVERSITY = re.compile(
+    r"\b(?:[A-Z][\w]*\s+)*(?:university|polytechnic|institute\s+of\s+technology)\b"
+    r"(?:\s+of\s+[\w\s]{1,30})?",
+    re.IGNORECASE,
+)
+# Also catch "X College / Academy / School" when it starts with a capital word
+_COLLEGE = re.compile(
+    r"\b[A-Z][\w\s]{0,30}(?:college|academy|school)\b",
+)
+
+# ── Gendered pronouns ──────────────────────────────────────────────────────────
 _PRONOUNS = re.compile(
     r"\b(he|him|his|she|her|hers|himself|herself)\b", re.IGNORECASE
 )
-# Common first-name patterns: capitalised word after "Name:", "Candidate:", at line start
-_PROPER_NAME = re.compile(r"\b([A-Z][a-z]{1,14})\s+([A-Z][a-z]{1,20})\b")
+
+# ── NRIC / national ID: S1234567A format (Singapore) ──────────────────────────
+_NRIC = re.compile(r"\b[STFG]\d{7}[A-Z]\b", re.IGNORECASE)
+
+# ── Nationality / race markers (can bias scoring) ─────────────────────────────
+_NATIONALITY = re.compile(
+    r"\b(singaporean|malaysian|indonesian|filipino|vietnamese|burmese|"
+    r"thai|chinese|indian|malay|eurasian|caucasian|american|british|"
+    r"australian|canadian|korean|japanese)\b",
+    re.IGNORECASE,
+)
+
+# ── Date-of-birth / age explicit mentions ─────────────────────────────────────
+_DOB = re.compile(
+    r"\b(?:date\s+of\s+birth|d\.?o\.?b\.?|age|born\s+(?:in|on))"
+    r"\s*[:\-]?\s*[\d/\-\w,\s]{0,30}",
+    re.IGNORECASE,
+)
+
+# ── Marital status ────────────────────────────────────────────────────────────
+_MARITAL = re.compile(
+    r"\b(single|married|divorced|widowed|marital\s+status\s*[:\-]?\s*\w+)\b",
+    re.IGNORECASE,
+)
 
 
 def anonymise_text(text: str) -> str:
-    """Strip PII from a CV so the LLM scores on skills alone, not identity."""
+    """Strip PII from a CV so the LLM scores on skills alone, not identity.
+
+    IMPORTANT: call this on the RAW extracted text, before preprocess_text(),
+    so that capitalisation, @ symbols and phone separators are still intact.
+    """
+    # 1. Contacts & links (most specific patterns first)
     text = _EMAIL.sub("[email]", text)
-    text = _PHONE.sub("[phone]", text)
     text = _URL.sub("[url]", text)
-    text = _NAME_TITLES.sub("", text)
-    text = _PRONOUNS.sub("they", text)
+    text = _PHONE.sub("[phone]", text)
+    text = _NRIC.sub("[ID]", text)
+
+    # 2. Demographic markers
+    text = _DOB.sub("[dob]", text)
+    text = _MARITAL.sub("[marital-status]", text)
+    text = _NATIONALITY.sub("[nationality]", text)
+
+    # 3. Institutions FIRST (before name matching) so full names like
+    #    "Nanyang Technological University" are caught as a unit, not split.
     text = _UNIVERSITY.sub("[University]", text)
-    text = _PROPER_NAME.sub("[Candidate]", text)
+    text = _COLLEGE.sub("[Institution]", text)
+
+    # 4. Titles, then names
+    text = _NAME_TITLES.sub("", text)
+    text = _ALLCAPS_NAME.sub("[Candidate]", text)
+    text = _PROPER_NAME.sub(_safe_name_sub, text)
+
+    # 5. Pronouns
+    text = _PRONOUNS.sub("they", text)
+
     return text
 
 
@@ -383,6 +502,7 @@ def screen_candidates(
     anonymise: bool = False,
     delay: int = 1,
     progress_callback=None,
+    raw_cv_files: Dict[str, str] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     if not groq_key or not groq_key.strip():
         raise ValueError("Groq API key is required.")
@@ -393,11 +513,21 @@ def screen_candidates(
 
     groq_client = Groq(api_key=groq_key.strip())
 
-    # Apply anonymisation to CV text before chunking/screening if requested
-    processed_cv_files = (
-        {name: anonymise_text(text) for name, text in cv_files.items()}
-        if anonymise else cv_files
-    )
+    # Apply anonymisation to CV text before chunking/screening if requested.
+    # IMPORTANT: anonymise_text() must run on the RAW (un-preprocessed) text so
+    # that capitalisation, @ signs and phone separators are still present.
+    # raw_cv_files should be the original extracted text before preprocess_text().
+    if anonymise and raw_cv_files:
+        processed_cv_files = {
+            name: preprocess_text(anonymise_text(raw_cv_files[name]))
+            for name in cv_files
+            if name in raw_cv_files
+        }
+    elif anonymise:
+        # Fallback: anonymise already-preprocessed text (less effective but safe)
+        processed_cv_files = {name: anonymise_text(text) for name, text in cv_files.items()}
+    else:
+        processed_cv_files = cv_files
 
     chunks = _build_chunks(processed_cv_files) if use_rag else []
     emb = get_embedding_model() if use_rag else None

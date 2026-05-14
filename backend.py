@@ -13,7 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
-VERSION = "v3.1-anonymise-fix"  # bump this when you redeploy to confirm Render picked up the new file
+VERSION = "v3.2-anonymise-polish"  # bump this when you redeploy to confirm Render picked up the new file
 
 QWEN_MODEL = "qwen/qwen3-32b"
 FINAL_CHUNK_SIZE = 700
@@ -417,13 +417,18 @@ _INSTITUTION = re.compile(
     re.IGNORECASE,
 )
 
-# ── Nationality / race / non-required language markers ────────────────────────
+# ── Nationality / race / language markers ────────────────────────────────────
 # Keep English because many JDs require English communication skills.
+# Language words are replaced with [language], not [nationality], so the preview
+# is easier to explain during testing.
+_LANGUAGE = re.compile(
+    r"\b(chinese|korean|japanese|mandarin|tamil|hokkien|cantonese|teochew|"
+    r"hakka|marathi|hindi|malay)\b",
+    re.IGNORECASE,
+)
 _NATIONALITY = re.compile(
     r"\b(singaporean|malaysian|indonesian|filipino|vietnamese|burmese|"
-    r"thai|chinese|indian|malay|eurasian|caucasian|american|british|"
-    r"australian|canadian|korean|japanese|"
-    r"mandarin|tamil|hokkien|cantonese|teochew|hakka|marathi|hindi)\b",
+    r"thai|indian|eurasian|caucasian|american|british|australian|canadian)\b",
     re.IGNORECASE,
 )
 
@@ -440,6 +445,21 @@ _MARITAL = re.compile(
 )
 _RELATIONSHIP = re.compile(r"(?im)^(\s*(?:[▪•\-]\s*)?relationship\s*[:\-]\s*)[^\n\r]+")
 _CONTACT_NO = re.compile(r"(?im)^(\s*(?:[▪•\-]\s*)?(?:contact\s+no|mobile|phone|home)\s*[:\-]\s*)[^\n\r]+")
+
+# Remove repeated school document classification labels such as
+# "Official (Closed) and Non-Sensitive". These are not useful to the LLM.
+_DOCUMENT_LABEL = re.compile(
+    r"(?im)^\s*official\s*\(?\s*closed\s*\)?\s*(?:and|&)\s*non[-\s]*sensitive\s*$"
+)
+
+# After phone/email/address replacements, collapse full contact/address lines so
+# the preview does not become messy text like "mobile phone home phone email email".
+_CONTACT_DETAIL_LINE = re.compile(
+    r"(?im)^.*\b(?:mobile|phone|home|email|contact\s+no)\b.*(?:\[phone\]|\[email\]).*$"
+)
+_ADDRESS_DETAIL_LINE = re.compile(
+    r"(?im)^.*(?:\[address\]|\[postal\]).*$"
+)
 
 _PRONOUN_MAP = {
     "he": "they", "she": "they",
@@ -532,6 +552,9 @@ def anonymise_text(text: str) -> str:
     if not isinstance(text, str):
         text = str(text)
 
+    # 0. Remove repeated document classification labels
+    text = _DOCUMENT_LABEL.sub("", text)
+
     # 1. Contact info and IDs
     text = _EMAIL.sub("[email]", text)
     text = _URL.sub("[url]", text)
@@ -542,6 +565,8 @@ def anonymise_text(text: str) -> str:
     text = _SG_ADDR.sub("[address]", text)
     text = _STREET_ADDR.sub("[address]", text)
     text = _SG_POSTAL.sub("[postal]", text)
+    text = _CONTACT_DETAIL_LINE.sub("[Contact details redacted]", text)
+    text = _ADDRESS_DETAIL_LINE.sub("[Address redacted]", text)
 
     # 3. Labelled personal fields and emergency-contact fields
     text = _LABELLED_NAME.sub(lambda m: m.group(1) + "[Candidate]", text)
@@ -556,6 +581,7 @@ def anonymise_text(text: str) -> str:
     text = _INSTITUTION.sub("[Institution]", text)
     text = _DOB.sub("[dob]", text)
     text = _MARITAL.sub("[marital-status]", text)
+    text = _LANGUAGE.sub("[language]", text)
     text = _NATIONALITY.sub("[nationality]", text)
 
     # 6. Pronouns: replace with neutral forms instead of deleting meaning

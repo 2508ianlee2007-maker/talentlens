@@ -505,12 +505,32 @@ with tab_run:
                     help="Shows the anonymised CV text that will be sent to the AI. Use this to verify PII has been removed.",
                 )
                 if show_anon_preview:
-                    st.caption("Preview of anonymised CV text (this is exactly what the LLM will receive):")
+                    st.caption("Preview of anonymised CV text. Page view is easier to inspect; LLM view shows the compact processed text used for screening.")
                     for name in st.session_state.cv_files:
                         raw = st.session_state.raw_cv_texts.get(name, "")
-                        anon_preview = backend.preprocess_text(backend.anonymise_text(raw)) if raw else "(no raw text available)"
+                        anon_page = backend.anonymise_text(raw).strip() if raw else "(no raw text available)"
+                        anon_llm = backend.preprocess_text(anon_page) if raw else "(no raw text available)"
+
                         with st.expander(f"🕵️ Preview: {fmt_name(name)}"):
-                            st.code(anon_preview[:2000])
+                            page_tab, llm_tab = st.tabs(["📄 Page view", "🤖 LLM view"])
+
+                            with page_tab:
+                                st.text_area(
+                                    "Anonymised CV page view",
+                                    value=anon_page[:6000],
+                                    height=520,
+                                    disabled=True,
+                                    label_visibility="collapsed",
+                                )
+
+                            with llm_tab:
+                                st.text_area(
+                                    "Compact text sent to LLM after preprocessing",
+                                    value=anon_llm[:6000],
+                                    height=300,
+                                    disabled=True,
+                                    label_visibility="collapsed",
+                                )
 
         total_pairs = len(st.session_state.jd_files) * len(st.session_state.cv_files)
         st.markdown(f'<div class="info-box">Ready to screen <strong>{len(st.session_state.cv_files)} candidate(s)</strong> against <strong>{len(st.session_state.jd_files)} job description(s)</strong> — {total_pairs} API call(s) total.</div>', unsafe_allow_html=True)

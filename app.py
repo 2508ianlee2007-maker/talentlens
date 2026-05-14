@@ -5,6 +5,7 @@ All AI/RAG/screening logic lives in backend.py
 
 import re
 import time
+import json
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -360,10 +361,31 @@ for k, v in _defaults.items():
         st.session_state[k] = v
 
 # ─── ROLE-BASED ACCESS CONTROL ────────────────────────────────────────────────
-USERS = {
+USER_DB_PATH = Path("users.json")
+DEFAULT_USERS = {
     "hr_admin": {"password": "hr123", "role": "HR"},
     "dept_user": {"password": "dept123", "role": "DEPARTMENT"},
 }
+
+
+def load_users() -> dict:
+    """Load demo/prototype user accounts from users.json if available."""
+    if USER_DB_PATH.exists():
+        try:
+            data = json.loads(USER_DB_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data:
+                return data
+        except Exception:
+            pass
+    return DEFAULT_USERS.copy()
+
+
+def save_users(users: dict) -> None:
+    """Save prototype accounts. For production, use DB + hashed passwords."""
+    USER_DB_PATH.write_text(json.dumps(users, indent=2), encoding="utf-8")
+
+
+USERS = load_users()
 
 def is_hr() -> bool:
     return st.session_state.get("role") == "HR"
@@ -528,9 +550,15 @@ with st.sidebar:
     st.caption(f"TalentLens v6 · FAISS RAG · Qwen3-32B · backend {backend.VERSION}")
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
-tab_run, tab_res, tab_matrix, tab_chat = st.tabs(
-    ["🚀 Run Screening", "📊 Results", "🗂️ Compare Matrix", "💬 Chat"]
-)
+if is_hr():
+    tab_run, tab_res, tab_matrix, tab_chat, tab_users = st.tabs(
+        ["🚀 Run Screening", "📊 Results", "🗂️ Compare Matrix", "💬 Chat", "👥 User Management"]
+    )
+else:
+    tab_run, tab_res, tab_matrix, tab_chat = st.tabs(
+        ["🚀 Run Screening", "📊 Results", "🗂️ Compare Matrix", "💬 Chat"]
+    )
+    tab_users = None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — RUN SCREENING
@@ -857,6 +885,91 @@ with tab_res:
                                             st.text_area("Email body (copy this)", body, height=220, key=f"email_{cv_name}")
                                     except Exception as e:
                                         st.error(f"Failed to generate email for {display_cv_name(cv_name)}: {e}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB — USER MANAGEMENT (HR ONLY)
+# ══════════════════════════════════════════════════════════════════════════════
+if tab_users is not None:
+    with tab_users:
+        st.markdown("## 👥 User Management")
+        st.caption("Prototype account setup for role-based access control. HR/Admin users can create HR or Department accounts from the website.")
+
+        users = load_users()
+
+        st.markdown("### Existing Accounts")
+        user_rows = [
+            {"Username": username, "Role": info.get("role", "")}
+            for username, info in users.items()
+        ]
+        st.dataframe(pd.DataFrame(user_rows), use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.markdown("### Create New Account")
+        with st.form("create_account_form"):
+            new_username = st.text_input("New username", placeholder="e.g. hiring_manager_1")
+            new_password = st.text_input("Temporary password", type="password")
+            new_role = st.selectbox("Role", ["HR", "DEPARTMENT"], format_func=lambda x: "HR / Admin" if x == "HR" else "Department User")
+            create_submitted = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+
+        if create_submitted:
+            uname = new_username.strip()
+            if not uname:
+                st.error("Username cannot be empty.")
+            elif not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", uname):
+                st.error("Username must be 3-32 characters and only use letters, numbers, dot, underscore or dash.")
+            elif uname in users:
+                st.error("That username already exists.")
+            elif len(new_password) < 4:
+                st.error("Password must be at least 4 characters for this prototype.")
+            else:
+                users[uname] = {"password": new_password, "role": new_role}
+                save_users(users)
+                st.success(f"Created {new_role} account: {uname}")
+                st.rerun()
+
+        st.divider()
+        st.markdown("### Manage Accounts")
+        editable_users = list(users.keys())
+        selected_user = st.selectbox("Select user", editable_users, key="manage_user_select")
+        if selected_user:
+            c1, c2 = st.columns(2)
+            with c1:
+                reset_password = st.text_input("New password", type="password", key="reset_password_input")
+                if st.button("Reset Password", use_container_width=True):
+                    if len(reset_password) < 4:
+                        st.error("Password must be at least 4 characters.")
+                    else:
+                        users[selected_user]["password"] = reset_password
+                        save_users(users)
+                        st.success(f"Password reset for {selected_user}.")
+                        st.rerun()
+            with c2:
+                new_role_for_user = st.selectbox(
+                    "Change role", ["HR", "DEPARTMENT"],
+                    index=0 if users[selected_user].get("role") == "HR" else 1,
+                    key="role_change_select",
+                    format_func=lambda x: "HR / Admin" if x == "HR" else "Department User",
+                )
+                if st.button("Update Role", use_container_width=True):
+                    users[selected_user]["role"] = new_role_for_user
+                    save_users(users)
+                    st.success(f"Updated {selected_user} to {new_role_for_user}.")
+                    st.rerun()
+
+            if selected_user == st.session_state.username:
+                st.info("You cannot delete the account you are currently logged in with.")
+            else:
+                if st.button("🗑️ Delete Selected Account", use_container_width=True):
+                    users.pop(selected_user, None)
+                    save_users(users)
+                    st.warning(f"Deleted account: {selected_user}")
+                    st.rerun()
+
+        st.markdown(
+            '<div class="warn-box">Prototype note: accounts are stored in <code>users.json</code>. '
+            'For a real production system, use a database with hashed passwords and proper authentication.</div>',
+            unsafe_allow_html=True,
+        )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — COMPARE MATRIX

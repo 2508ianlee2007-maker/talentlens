@@ -20,7 +20,7 @@ try:
 except Exception:
     spacy = None
 
-VERSION = "v3.3-rbac-explain-ner-feedback"  # bump this when you redeploy to confirm Render picked up the new file
+VERSION = "v3.4-upload-accounts"  # bump this when you redeploy to confirm Render picked up the new file
 
 QWEN_MODEL = "qwen/qwen3-32b"
 FINAL_CHUNK_SIZE = 700
@@ -668,6 +668,66 @@ MIN_JD_CHARS  = 100
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
+def _keyword_score(text: str, weighted_keywords) -> int:
+    """Score simple keyword/section matches for upload-type validation."""
+    t = (text or "").lower()
+    score = 0
+    for keyword, weight in weighted_keywords:
+        if keyword in t:
+            score += weight
+    return score
+
+
+def classify_uploaded_document(filename: str, text: str) -> Dict[str, Any]:
+    """Heuristically classify an uploaded file as likely CV, likely JD, or unknown.
+
+    This is a user-error safety check only. It avoids LLM/API calls and uses
+    section keywords that commonly appear in CVs and job descriptions.
+    """
+    name = (filename or "").lower()
+    t = (text or "").lower()
+
+    cv_keywords = [
+        ("curriculum vitae", 5), ("resume", 5), ("contact", 3), ("mobile", 3),
+        ("email", 2), ("education", 3), ("work experience", 4),
+        ("professional experience", 4), ("project details", 2), ("skills", 2),
+        ("awards", 2), ("achievements", 2), ("certifications", 2),
+        ("languages", 2), ("objective", 1), ("summary", 1),
+    ]
+    jd_keywords = [
+        ("job description", 5), ("job responsibilities", 5), ("responsibilities", 4),
+        ("requirements", 4), ("required qualifications", 5), ("qualifications", 4),
+        ("specific responsibilities", 4), ("specific qualifications", 4),
+        ("minimum", 2), ("preferred", 2), ("must have", 3),
+        ("candidate should", 3), ("years of experience", 3), ("role", 1),
+    ]
+
+    cv_score = _keyword_score(t, cv_keywords)
+    jd_score = _keyword_score(t, jd_keywords)
+
+    # Filename is a useful signal, but keep it lower than content evidence.
+    if any(k in name for k in ["cv", "resume", "curriculum"]):
+        cv_score += 4
+    if any(k in name for k in ["job description", "jd", "job_", "position", "role"]):
+        jd_score += 3
+
+    likely = "unknown"
+    if cv_score >= 7 and cv_score >= jd_score + 3:
+        likely = "cv"
+    elif jd_score >= 7 and jd_score >= cv_score + 3:
+        likely = "jd"
+
+    return {"likely": likely, "cv_score": cv_score, "jd_score": jd_score}
+
+
+def _safe_read_upload_for_validation(uploaded_file) -> str:
+    """Read uploaded file text for validation without breaking later processing."""
+    try:
+        return read_uploaded_file(uploaded_file)
+    except Exception:
+        return ""
+
+
 def validate_uploads(jd_uploads, cv_uploads):
     """Return a list of warning strings. Empty list = all good."""
     warnings = []
@@ -700,6 +760,29 @@ def validate_uploads(jd_uploads, cv_uploads):
             warnings.append(f"'{f.name}' appears to be empty (0 bytes).")
         elif size > MAX_FILE_SIZE:
             warnings.append(f"'{f.name}' is larger than 5 MB — consider splitting it.")
+
+    # Content-type safety check: detect likely CV/JD uploaded into the wrong slot.
+    # This prevents accidental screening where a resume is treated as the job
+    # description or a job description is treated as a candidate CV.
+    for f in jd_uploads:
+        raw = _safe_read_upload_for_validation(f)
+        cls = classify_uploaded_document(f.name, raw)
+        if cls["likely"] == "cv":
+            warnings.append(
+                f"'{f.name}' looks like a CV/resume but was uploaded under Job Descriptions. "
+                f"Please move it to the Candidate CV uploader. "
+                f"(CV score {cls['cv_score']}, JD score {cls['jd_score']})"
+            )
+
+    for f in cv_uploads:
+        raw = _safe_read_upload_for_validation(f)
+        cls = classify_uploaded_document(f.name, raw)
+        if cls["likely"] == "jd":
+            warnings.append(
+                f"'{f.name}' looks like a Job Description but was uploaded under Candidate CVs. "
+                f"Please move it to the Job Description uploader. "
+                f"(JD score {cls['jd_score']}, CV score {cls['cv_score']})"
+            )
 
     return warnings
 

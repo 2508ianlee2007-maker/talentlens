@@ -91,8 +91,21 @@ def get_embedding_model():
 
 
 def read_pdf_text(path: str) -> str:
+    """Extract text from PDF preserving visual reading order.
+
+    Uses layout mode which respects column structure, preventing words from
+    different columns/sections being incorrectly concatenated by pypdf.
+    Falls back to plain mode if layout extraction fails.
+    """
     reader = PdfReader(str(path))
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    pages = []
+    for page in reader.pages:
+        try:
+            text = page.extract_text(extraction_mode="layout") or ""
+        except Exception:
+            text = page.extract_text() or ""  # plain mode fallback
+        pages.append(text)
+    return "\n".join(pages)
 
 
 def read_txt_text(path: str) -> str:
@@ -304,19 +317,21 @@ def _call_llm(client: Groq, prompt: str, retries: int = 3, base_delay: float = 5
 
 # ── Emails: standard + obfuscated variants ────────────────────────────────────
 _EMAIL = re.compile(
-    r"[\w.\-+]+\s*(?:@|\[at\]|\(at\)|＠)\s*[\w.\-]+\s*(?:\.|"
-    r"\[dot\]|\(dot\))\s*[a-z]{2,}",
+    r"[\w.\-+]+\s*(?:@|\[at\]|\(at\)|＠)\s*[\w.\-]+\s*(?:\."
+    r"|\[dot\]|\(dot\))\s*[a-z]{2,}",
     re.IGNORECASE,
 )
 
-# ── Phone numbers: international, local, spaced, dotted, bracketed, bare SG ───
-# Bare 8-digit SG numbers: mobile starts with 8/9, home with 6
+# ── Phone numbers ─────────────────────────────────────────────────────────────
+# Carefully avoids matching year ranges like 2021-2023.
+# Dashed numbers only matched when first block starts with SG prefix (6/8/9).
 _PHONE = re.compile(
     r"(?<!\d)(?:"
     r"\+\d{1,3}[\s\-.]?\d{4,5}[\s\-.]?\d{4,5}"   # +65 9123 4567
-    r"|\(\d{1,4}\)[\s\-.]?\d{3,5}[\s\-.]?\d{3,5}"  # (65) 9123 4567
-    r"|(?<!\d)[689]\d{7}(?!\d)"                           # bare SG 8-digit
-    r"|\d{3,5}[\s\-.]\d{3,5}(?:[\s\-.]\d{2,5})?"     # generic separated
+    r"|\(\d{1,4}\)[\s\-.]?\d{3,5}[\s\-.]?\d{3,5}" # (65) 9123 4567
+    r"|[689]\d{7}"                                  # bare SG 8-digit (no separator)
+    r"|[689]\d{3}[\s\.\-]\d{4}"                    # SG with separator: 9123-4567
+    r"|\d{4,5}[\s\.]\d{4,5}"                       # other spaced/dotted (not dashed, avoids years)
     r")(?!\d)",
     re.IGNORECASE,
 )
@@ -326,8 +341,8 @@ _SG_POSTAL = re.compile(r"\b(?:singapore\s+|s\()?\d{6}\b", re.IGNORECASE)
 
 # ── Singapore block/unit address ──────────────────────────────────────────────
 _SG_ADDR = re.compile(
-    r"\b(?:blk|block)\s+\d+\b[^,\n]*"   # Blk 85 Street Name
-    r"|\#\d+[\-\u2013]\d+",              # #10-01
+    r"\b(?:blk|block)\s+\d+\b[^,\n]*"  # Blk 85 Street Name
+    r"|\#\d+[\-\u2013]\d+",            # #10-01
     re.IGNORECASE,
 )
 
@@ -339,7 +354,7 @@ _STREET_ADDR = re.compile(
     re.IGNORECASE,
 )
 
-# ── URLs: with or without http/https, linkedin, github, personal sites ─────────
+# ── URLs: with or without http/https ──────────────────────────────────────────
 _URL = re.compile(
     r"(?:https?://|www\.)\S+"
     r"|(?:linkedin\.com|github\.com|gitlab\.com|behance\.net|"
@@ -353,8 +368,9 @@ _NAME_TITLES = re.compile(
     re.IGNORECASE,
 )
 
-# ── ALL-CAPS names: e.g. "JOHN SMITH" or "TAN WEI MING" ──────────────────────
-_ALLCAPS_NAME = re.compile(r"\b([A-Z]{2,15})(?:\s+[A-Z]{2,15}){1,2}\b")
+# ── ALL-CAPS names: "JOHN SMITH", "TAN WEI MING", up to 4 words ──────────────
+# Short abbreviations (AI, NLP, SQL etc.) are 1 word so won't match.
+_ALLCAPS_NAME = re.compile(r"\b([A-Z]{2,15})(?:\s+[A-Z]{2,15}){1,3}\b")
 
 # ── Whitelisted title-case phrases that look like names but aren't ────────────
 _NAME_WHITELIST = re.compile(
@@ -378,8 +394,8 @@ _NAME_WHITELIST = re.compile(
     re.IGNORECASE,
 )
 
-# ── Title-case names ──────────────────────────────────────────────────────────
-_PROPER_NAME = re.compile(r"\b([A-Z][a-z]{1,20})(?:\s+[A-Z][a-z]{1,20}){1,2}\b")
+# ── Title-case names: "John Smith", "Wei Ming Tan" ────────────────────────────
+_PROPER_NAME = re.compile(r"\b([A-Z][a-z]{1,20})(?:\s+[A-Z][a-z]{1,20}){1,3}\b")
 
 def _safe_name_sub(m: re.Match) -> str:
     if _NAME_WHITELIST.match(m.group(0).strip()):
@@ -389,7 +405,8 @@ def _safe_name_sub(m: re.Match) -> str:
 # ── Universities / institutions (run BEFORE name matching) ────────────────────
 _UNIVERSITY = re.compile(
     r"\b(?:[A-Z][\w]*\s+)*(?:university|polytechnic|institute\s+of\s+technology)\b"
-    r"(?:\s+of\s+[\w\s]{1,30})?",
+    r"(?:\s+of\s+[\w\s]{1,30})?"   # "of Singapore/Technology"
+    r"(?:\s+[A-Z][a-z]+)*",           # trailing location words e.g. "Singapore"
     re.IGNORECASE,
 )
 _COLLEGE = re.compile(r"\b[A-Z][\w\s]{0,30}(?:college|academy|school)\b")
@@ -400,7 +417,7 @@ _PRONOUNS = re.compile(r"\b(he|him|his|she|her|hers|himself|herself)\b", re.IGNO
 # ── NRIC / national ID ────────────────────────────────────────────────────────
 _NRIC = re.compile(r"\b[STFG]\d{7}[A-Z]\b", re.IGNORECASE)
 
-# ── Nationality / race / Chinese dialects (can bias scoring) ─────────────────
+# ── Nationality / race / Chinese dialects ─────────────────────────────────────
 _NATIONALITY = re.compile(
     r"\b(singaporean|malaysian|indonesian|filipino|vietnamese|burmese|"
     r"thai|chinese|indian|malay|eurasian|caucasian|american|british|"
@@ -435,7 +452,7 @@ def anonymise_text(text: str) -> str:
     text = _PHONE.sub("[phone]", text)
     text = _NRIC.sub("[ID]", text)
 
-    # 2. Address components (before name matching to avoid cross-contamination)
+    # 2. Address components (before name matching)
     text = _SG_ADDR.sub("[address]", text)
     text = _STREET_ADDR.sub("[address]", text)
     text = _SG_POSTAL.sub("[postal]", text)
@@ -445,12 +462,11 @@ def anonymise_text(text: str) -> str:
     text = _MARITAL.sub("[marital-status]", text)
     text = _NATIONALITY.sub("[nationality]", text)
 
-    # 4. Institutions BEFORE names (so "Nanyang Technological University" is
-    #    caught as a whole unit, not split into a name + leftover keyword)
+    # 4. Institutions BEFORE names
     text = _UNIVERSITY.sub("[University]", text)
     text = _COLLEGE.sub("[Institution]", text)
 
-    # 5. Titles, then names
+    # 5. Titles then names
     text = _NAME_TITLES.sub("", text)
     text = _ALLCAPS_NAME.sub("[Candidate]", text)
     text = _PROPER_NAME.sub(_safe_name_sub, text)

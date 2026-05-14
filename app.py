@@ -1,5 +1,5 @@
 """
-TalentLens — Streamlit frontend (v5)
+TalentLens — Streamlit frontend (v6)
 All AI/RAG/screening logic lives in backend.py
 """
 
@@ -350,10 +350,67 @@ _defaults = {
     "anonymise":     False,
     "shortlist":     [],       # list of cv_name strings ticked for emailing
     "uploader_key":  0,        # incrementing this forces file uploaders to visually reset
+    "logged_in":     False,
+    "username":      "",
+    "role":          "",
+    "hr_feedback":   {},
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# ─── ROLE-BASED ACCESS CONTROL ────────────────────────────────────────────────
+USERS = {
+    "hr_admin": {"password": "hr123", "role": "HR"},
+    "dept_user": {"password": "dept123", "role": "DEPARTMENT"},
+}
+
+def is_hr() -> bool:
+    return st.session_state.get("role") == "HR"
+
+def is_department() -> bool:
+    return st.session_state.get("role") == "DEPARTMENT"
+
+def display_cv_name(filename: str) -> str:
+    """HR sees real filenames; department users see anonymised labels."""
+    if is_hr():
+        return fmt_name(filename)
+    all_names = list(st.session_state.get("cv_files", {}).keys())
+    if filename in all_names:
+        return f"Candidate {all_names.index(filename) + 1}"
+    m = re.search(r"candidate[_\s-]*(\d+)", str(filename), re.IGNORECASE)
+    if m:
+        return f"Candidate {m.group(1)}"
+    return "Candidate"
+
+def anonymised_cv_texts_for_chat():
+    if is_hr():
+        return st.session_state.raw_cv_texts
+    return {
+        display_cv_name(name): backend.anonymise_text(text)
+        for name, text in st.session_state.raw_cv_texts.items()
+    }
+
+if not st.session_state.logged_in:
+    st.title("🔐 TalentLens Login")
+    st.caption("Role-based access control for fair CV screening")
+    with st.form("login_form"):
+        username = st.text_input("Username", placeholder="hr_admin or dept_user")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
+    if submitted:
+        user = USERS.get(username.strip())
+        if user and password == user["password"]:
+            st.session_state.logged_in = True
+            st.session_state.username = username.strip()
+            st.session_state.role = user["role"]
+            if user["role"] == "DEPARTMENT":
+                st.session_state.anonymise = True
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+    st.info("Demo accounts: HR = hr_admin / hr123 · Department = dept_user / dept123")
+    st.stop()
 
 def reset_all():
     for k in ["jd_files", "cv_files", "raw_jd_texts", "raw_cv_texts", "results", "chat_history"]:
@@ -367,6 +424,14 @@ def reset_all():
 with st.sidebar:
     st.markdown("## 🔍 TalentLens")
     st.caption("Qwen3-32B via Groq · FAISS RAG")
+    st.markdown(f"**Logged in:** `{st.session_state.username}`")
+    role_label = "HR / Admin" if is_hr() else "Department User"
+    st.caption(f"Role: {role_label}")
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.session_state.role = ""
+        st.rerun()
     st.divider()
 
     st.markdown("### 🔑 Groq API Key")
@@ -438,13 +503,17 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### ⚙️ Options")
-    st.session_state.anonymise = st.toggle(
-        "🕵️ Anonymise CVs",
-        value=st.session_state.anonymise,
-        help="Strips names, emails, universities and pronouns from CVs before screening to reduce bias.",
-    )
-    if st.session_state.anonymise:
-        st.markdown('<div class="info-box">🕵️ Anonymisation ON — names, emails, universities and pronouns will be hidden from the AI.</div>', unsafe_allow_html=True)
+    if is_department():
+        st.session_state.anonymise = True
+        st.markdown('<div class="info-box">🕵️ Department mode — anonymisation is forced ON. Full candidate details are hidden.</div>', unsafe_allow_html=True)
+    else:
+        st.session_state.anonymise = st.toggle(
+            "🕵️ Anonymise CVs",
+            value=st.session_state.anonymise,
+            help="Strips names, emails, universities and pronouns from CVs before screening to reduce bias.",
+        )
+        if st.session_state.anonymise:
+            st.markdown('<div class="info-box">🕵️ Anonymisation ON — names, emails, universities and pronouns will be hidden from the AI.</div>', unsafe_allow_html=True)
 
     st.divider()
     st.markdown("### 🗑️ Reset")
@@ -456,7 +525,7 @@ with st.sidebar:
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.divider()
-    st.caption(f"TalentLens v5 · FAISS RAG · Qwen3-32B · backend {backend.VERSION}")
+    st.caption(f"TalentLens v6 · FAISS RAG · Qwen3-32B · backend {backend.VERSION}")
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
 tab_run, tab_res, tab_matrix, tab_chat = st.tabs(
@@ -478,11 +547,11 @@ with tab_run:
         with col_jd:
             st.markdown("**📄 Job Descriptions**")
             for n in st.session_state.jd_files:
-                st.markdown(f'<div class="file-pill"><span>📄</span><span class="file-pill-name">{fmt_name(n)}</span><span class="file-pill-size">{len(st.session_state.raw_jd_texts[n]):,} chars</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="file-pill"><span>📄</span><span class="file-pill-name">{display_cv_name(n)}</span><span class="file-pill-size">{len(st.session_state.raw_jd_texts[n]):,} chars</span></div>', unsafe_allow_html=True)
         with col_cv:
             st.markdown("**👤 Candidate CVs**")
             for n in st.session_state.cv_files:
-                st.markdown(f'<div class="file-pill"><span>👤</span><span class="file-pill-name">{fmt_name(n)}</span><span class="file-pill-size">{len(st.session_state.raw_cv_texts[n]):,} chars</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="file-pill"><span>👤</span><span class="file-pill-name">{display_cv_name(n)}</span><span class="file-pill-size">{len(st.session_state.raw_cv_texts[n]):,} chars</span></div>', unsafe_allow_html=True)
 
         st.divider()
 
@@ -542,22 +611,34 @@ with tab_run:
                 prog.progress(step / total, text=f"({step}/{total}) Scoring {fmt_name(cv_name)} for {fmt_name(jd_name)}…")
 
             try:
+                screen_cv_files = st.session_state.cv_files
+                screen_raw_cv_texts = st.session_state.raw_cv_texts
+                screen_anonymise = st.session_state.anonymise
+
+                # Department users should not pass real filenames/details into the LLM.
+                # Use generic candidate labels and force anonymisation.
+                if is_department():
+                    alias_map = {name: f"Candidate_{i+1}" for i, name in enumerate(st.session_state.cv_files.keys())}
+                    screen_cv_files = {alias_map[name]: text for name, text in st.session_state.cv_files.items()}
+                    screen_raw_cv_texts = {alias_map[name]: st.session_state.raw_cv_texts[name] for name in st.session_state.cv_files if name in st.session_state.raw_cv_texts}
+                    screen_anonymise = True
+
                 all_results = backend.screen_candidates(
                     jd_files=st.session_state.jd_files,
-                    cv_files=st.session_state.cv_files,
+                    cv_files=screen_cv_files,
                     groq_key=st.session_state.groq_key,
                     use_rag=use_rag,
-                    anonymise=st.session_state.anonymise,
+                    anonymise=screen_anonymise,
                     delay=int(delay),
                     progress_callback=progress_cb,
-                    raw_cv_files=st.session_state.raw_cv_texts,
+                    raw_cv_files=screen_raw_cv_texts,
                 )
                 prog.empty()
                 st.session_state.results       = all_results
                 st.session_state.analysis_done = True
                 first_jd = list(all_results.keys())[0]
                 best     = all_results[first_jd][0]
-                st.markdown(f'<div class="success-box">✅ Screening complete! Top candidate: <strong>{fmt_name(best["cv_name"])}</strong> — Score: <strong>{best["score"]}/10</strong>. Open <strong>Results</strong> or <strong>Compare Matrix</strong> tab.</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="success-box">✅ Screening complete! Top candidate: <strong>{display_cv_name(best["cv_name"])}</strong> — Score: <strong>{best["score"]}/10</strong>. Open <strong>Results</strong> or <strong>Compare Matrix</strong> tab.</div>', unsafe_allow_html=True)
             except Exception as e:
                 prog.empty()
                 st.error(f"❌ Screening failed: {e}")
@@ -612,7 +693,7 @@ with tab_res:
             st.markdown(
                 f'<div class="card-hero">'
                 f'<span class="best-badge">⭐ Best Match</span>&nbsp;&nbsp;{rec_badge(rec)}<br>'
-                f'<span style="font-size:1.4rem;font-weight:800">{fmt_name(best["cv_name"])}</span>'
+                f'<span style="font-size:1.4rem;font-weight:800">{display_cv_name(best["cv_name"])}</span>'
                 f'&nbsp;<span style="opacity:0.5;font-size:0.9rem">Score: <span style="color:{color};font-weight:700">{best["score"]}/10</span></span><br>'
                 f'<span class="verdict {vcls}">{verdict}</span><br>'
                 f'{summary_html}'
@@ -622,12 +703,12 @@ with tab_res:
             m1.metric("CVs Shown",     len(filtered))
             m2.metric("Best Score",    f"{max(scores):.1f}/10" if scores else "—")
             m3.metric("Avg Score",     f"{sum(scores)/len(scores):.1f}/10" if scores else "—")
-            m4.metric("Top Candidate", fmt_name(jd_res[0]["cv_name"]) if jd_res else "—")
+            m4.metric("Top Candidate", display_cv_name(jd_res[0]["cv_name"]) if jd_res else "—")
 
             st.divider()
             st.markdown("**Score Comparison**")
             chart_data = pd.DataFrame({
-                "Candidate": [fmt_name(r["cv_name"]) for r in filtered],
+                "Candidate": [display_cv_name(r["cv_name"]) for r in filtered],
                 "Score /10": [r["score"] if r["score"] is not None else 0 for r in filtered],
             }).set_index("Candidate")
             st.bar_chart(chart_data, color="#3b82f6")
@@ -643,7 +724,7 @@ with tab_res:
                 score_str     = f"{r['score']}/10" if r["score"] is not None else "N/A"
                 mode_badge    = f'<span style="font-size:11px;opacity:0.45;padding:2px 8px;border-radius:10px;border:1px solid rgba(148,163,184,0.25)">{r.get("mode","")}</span>'
 
-                with st.expander(f"{rank_icon}  {fmt_name(r['cv_name'])}  —  {score_str}", expanded=(i == 0)):
+                with st.expander(f"{rank_icon}  {display_cv_name(r['cv_name'])}  —  {score_str}", expanded=(i == 0)):
                     left, right = st.columns([3, 1])
 
                     with left:
@@ -673,9 +754,47 @@ with tab_res:
                         clean = re.sub(r"<think>.*?</think>", "", r["output"], flags=re.DOTALL | re.IGNORECASE).strip()
                         st.markdown(clean)
 
+                    if r.get("rag_evidence"):
+                        with st.expander("🔎 Explainability: Retrieved RAG Evidence"):
+                            st.caption("These are the exact resume chunks retrieved by FAISS and sent to the LLM for this candidate.")
+                            for chunk_i, chunk in enumerate(r.get("rag_evidence", []), start=1):
+                                st.markdown(f"**Chunk {chunk_i}**")
+                                st.text_area("", chunk, height=120, key=f"rag_{sel_jd}_{r['cv_name']}_{chunk_i}", label_visibility="collapsed")
+
+                    if is_hr():
+                        with st.expander("📝 HR Feedback / Score Correction"):
+                            fb_key = f"{sel_jd}::{r['cv_name']}"
+                            saved = st.session_state.hr_feedback.get(fb_key, {})
+                            corrected_score = st.slider(
+                                "Corrected score", 0.0, 10.0,
+                                float(saved.get("corrected_score", r["score"] if r["score"] is not None else 0.0)),
+                                0.5, key=f"score_{fb_key}"
+                            )
+                            corrected_rec = st.selectbox(
+                                "Corrected recommendation", ["Advance", "Hold", "Reject"],
+                                index=["Advance", "Hold", "Reject"].index(saved.get("corrected_recommendation", extract_recommendation(r.get("output", "")) or "Hold")),
+                                key=f"rec_{fb_key}"
+                            )
+                            note = st.text_area("HR feedback note", value=saved.get("feedback_note", ""), key=f"note_{fb_key}")
+                            if st.button("Save HR feedback", key=f"save_{fb_key}"):
+                                st.session_state.hr_feedback[fb_key] = {
+                                    "job_description": sel_jd,
+                                    "candidate": r["cv_name"],
+                                    "original_score": r["score"],
+                                    "corrected_score": corrected_score,
+                                    "corrected_recommendation": corrected_rec,
+                                    "feedback_note": note,
+                                }
+                                st.success("HR feedback saved.")
+
+            if is_hr() and st.session_state.hr_feedback:
+                fb_df = pd.DataFrame(list(st.session_state.hr_feedback.values()))
+                st.download_button("⬇️ Download HR Feedback CSV", fb_df.to_csv(index=False),
+                                   file_name="talentlens_hr_feedback.csv", mime="text/csv", use_container_width=True)
+
             st.divider()
             rows = [{
-                "Rank": i+1, "Candidate": fmt_name(r["cv_name"]), "File": r["cv_name"],
+                "Rank": i+1, "Candidate": display_cv_name(r["cv_name"]), "File": r["cv_name"],
                 "Score /10": r["score"], "Verdict": verdict_label(r["score"])[0],
                 "Recommendation": extract_recommendation(r.get("output", "")),
                 "Mode": r.get("mode",""), "Summary": (r.get("summary") or "")[:200],
@@ -686,55 +805,58 @@ with tab_res:
 
             # ── EMAIL SHORTLISTING ────────────────────────────────────────────
             st.divider()
-            st.markdown("### ✉️ Email Shortlisting")
-            st.caption("Tick candidates to shortlist, then generate a personalised interview invitation email for each.")
+            if not is_hr():
+                st.info("Email shortlisting is only available to HR users because it may reveal/contact candidates.")
+            else:
+                st.markdown("### ✉️ Email Shortlisting")
+                st.caption("Tick candidates to shortlist, then generate a personalised interview invitation email for each.")
 
-            job_title    = st.text_input("Job Title", placeholder="e.g. Senior Hardware Engineer")
-            company_name = st.text_input("Company Name", placeholder="e.g. Acme Semiconductors")
-            extra_notes  = st.text_area("Extra notes (optional)", placeholder="e.g. Remote role, 2 interview rounds, start date Q3", height=68)
+                job_title    = st.text_input("Job Title", placeholder="e.g. Senior Hardware Engineer")
+                company_name = st.text_input("Company Name", placeholder="e.g. Acme Semiconductors")
+                extra_notes  = st.text_area("Extra notes (optional)", placeholder="e.g. Remote role, 2 interview rounds, start date Q3", height=68)
 
-            shortlisted = []
-            st.markdown("**Select candidates to shortlist:**")
-            for r in filtered:
-                checked = st.checkbox(
-                    f"{fmt_name(r['cv_name'])}  —  {r['score']}/10",
-                    key=f"sl_{r['cv_name']}",
-                )
-                if checked:
-                    shortlisted.append(r["cv_name"])
+                shortlisted = []
+                st.markdown("**Select candidates to shortlist:**")
+                for r in filtered:
+                    checked = st.checkbox(
+                        f"{display_cv_name(r['cv_name'])}  —  {r['score']}/10",
+                        key=f"sl_{r['cv_name']}",
+                    )
+                    if checked:
+                        shortlisted.append(r["cv_name"])
 
-            if shortlisted:
-                st.markdown(f'<div class="info-box">✉️ {len(shortlisted)} candidate(s) selected for shortlisting.</div>', unsafe_allow_html=True)
-                if st.button("✉️ Generate Invitation Emails", type="primary", use_container_width=True):
-                    if not job_title.strip():
-                        st.warning("Please enter a job title first.")
-                    else:
-                        for cv_name in shortlisted:
-                            with st.spinner(f"Generating email for {fmt_name(cv_name)}…"):
-                                try:
-                                    email_text = backend.generate_shortlist_email(
-                                        groq_key=st.session_state.groq_key,
-                                        candidate_name=fmt_name(cv_name),
-                                        job_title=job_title.strip(),
-                                        company_name=company_name.strip() or "our company",
-                                        extra_notes=extra_notes.strip(),
-                                    )
-                                    lines = email_text.split("\n")
-                                    subject = ""
-                                    body_lines = []
-                                    for line in lines:
-                                        if line.lower().startswith("subject:"):
-                                            subject = line[8:].strip()
-                                        else:
-                                            body_lines.append(line)
-                                    body = "\n".join(body_lines).strip()
+                if shortlisted:
+                    st.markdown(f'<div class="info-box">✉️ {len(shortlisted)} candidate(s) selected for shortlisting.</div>', unsafe_allow_html=True)
+                    if st.button("✉️ Generate Invitation Emails", type="primary", use_container_width=True):
+                        if not job_title.strip():
+                            st.warning("Please enter a job title first.")
+                        else:
+                            for cv_name in shortlisted:
+                                with st.spinner(f"Generating email for {display_cv_name(cv_name)}…"):
+                                    try:
+                                        email_text = backend.generate_shortlist_email(
+                                            groq_key=st.session_state.groq_key,
+                                            candidate_name=display_cv_name(cv_name),
+                                            job_title=job_title.strip(),
+                                            company_name=company_name.strip() or "our company",
+                                            extra_notes=extra_notes.strip(),
+                                        )
+                                        lines = email_text.split("\n")
+                                        subject = ""
+                                        body_lines = []
+                                        for line in lines:
+                                            if line.lower().startswith("subject:"):
+                                                subject = line[8:].strip()
+                                            else:
+                                                body_lines.append(line)
+                                        body = "\n".join(body_lines).strip()
 
-                                    with st.expander(f"✉️ Email for {fmt_name(cv_name)}", expanded=True):
-                                        if subject:
-                                            st.markdown(f"**Subject:** {subject}")
-                                        st.text_area("Email body (copy this)", body, height=220, key=f"email_{cv_name}")
-                                except Exception as e:
-                                    st.error(f"Failed to generate email for {fmt_name(cv_name)}: {e}")
+                                        with st.expander(f"✉️ Email for {display_cv_name(cv_name)}", expanded=True):
+                                            if subject:
+                                                st.markdown(f"**Subject:** {subject}")
+                                            st.text_area("Email body (copy this)", body, height=220, key=f"email_{cv_name}")
+                                    except Exception as e:
+                                        st.error(f"Failed to generate email for {display_cv_name(cv_name)}: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — COMPARE MATRIX
@@ -774,7 +896,7 @@ with tab_matrix:
             avg_str = f"{avg_val:.1f}" if avg_val is not None else "—"
             avg_c   = score_color(avg_val)
 
-            row = f'<td><strong>{fmt_name(cv)}</strong></td>'
+            row = f'<td><strong>{display_cv_name(cv)}</strong></td>'
             for jd in jd_cols:
                 r = lookup[cv].get(jd)
                 if r and r["score"] is not None:
@@ -800,7 +922,7 @@ with tab_matrix:
         matrix_rows = []
         for cv in sorted_cvs:
             sc_list  = [lookup[cv][j]["score"] for j in jd_cols if lookup[cv].get(j) and lookup[cv][j]["score"] is not None]
-            row_data = {"Candidate": fmt_name(cv)}
+            row_data = {"Candidate": display_cv_name(cv)}
             for jd in jd_cols:
                 r = lookup[cv].get(jd)
                 row_data[fmt_name(jd)] = r["score"] if r and r["score"] is not None else ""
@@ -823,7 +945,7 @@ with tab_chat:
         def run_chat_llm(question: str):
             context = backend.build_chat_context(
                 raw_jd_texts=st.session_state.raw_jd_texts,
-                raw_cv_texts=st.session_state.raw_cv_texts,
+                raw_cv_texts=anonymised_cv_texts_for_chat(),
                 results=st.session_state.results,
             )
             recent_history = st.session_state.chat_history[-8:]

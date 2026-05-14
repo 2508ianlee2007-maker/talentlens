@@ -13,7 +13,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
-VERSION = "v3.2-anonymise-polish"  # bump this when you redeploy to confirm Render picked up the new file
+# Optional local NER support. If spaCy/model is unavailable, the app still works
+# using regex-only anonymisation, so deployment/demo will not break.
+try:
+    import spacy
+except Exception:
+    spacy = None
+
+VERSION = "v3.3-rbac-explain-ner-feedback"  # bump this when you redeploy to confirm Render picked up the new file
 
 QWEN_MODEL = "qwen/qwen3-32b"
 FINAL_CHUNK_SIZE = 700
@@ -274,13 +281,21 @@ def _build_chunks(cv_files: Dict[str, str]):
     return splitter.split_documents(documents)
 
 
-def _get_rag_context(chunks, emb, cv_name: str, query: str) -> str:
+def _get_rag_context_and_evidence(chunks, emb, cv_name: str, query: str):
+    """Return the RAG context plus the exact retrieved chunks for explainability."""
     cand_chunks = [c for c in chunks if c.metadata.get("source") == cv_name]
     if not cand_chunks:
-        return ""
+        return "", []
     vectorstore = FAISS.from_documents(cand_chunks, emb)
     retriever = vectorstore.as_retriever(search_kwargs={"k": min(FINAL_K, len(cand_chunks))})
-    return "\n\n".join(d.page_content for d in retriever.invoke(query))
+    docs = retriever.invoke(query)
+    evidence = [d.page_content for d in docs]
+    return "\n\n".join(evidence), evidence
+
+
+def _get_rag_context(chunks, emb, cv_name: str, query: str) -> str:
+    context, _ = _get_rag_context_and_evidence(chunks, emb, cv_name, query)
+    return context
 
 
 def _call_llm(client: Groq, prompt: str, retries: int = 3, base_delay: float = 5.0) -> str:
@@ -542,6 +557,64 @@ def _redact_header_names(text: str, max_lines: int = 14) -> str:
     return "\n".join(lines)
 
 
+_NLP = None
+
+def get_ner_model():
+    """Load spaCy NER lazily. Returns None if spaCy/model is unavailable."""
+    global _NLP
+    if spacy is None:
+        return None
+    if _NLP is None:
+        try:
+            _NLP = spacy.load("en_core_web_sm")
+        except Exception:
+            _NLP = None
+    return _NLP
+
+
+def _apply_ner_anonymisation(text: str) -> str:
+    """Hybrid anonymisation: regex handles fixed PII; NER helps with names/orgs/locations.
+
+    This is intentionally conservative and optional. If the NER model cannot load,
+    it returns the original text so regex-only anonymisation still works.
+    """
+    nlp = get_ner_model()
+    if nlp is None or not text.strip():
+        return text
+
+    doc = nlp(text)
+    replacements = []
+    for ent in doc.ents:
+        label = ent.label_
+        value = ent.text.strip()
+        if not value or len(value) < 3:
+            continue
+
+        lowered = value.lower()
+        # Keep technical terms and already-redacted labels.
+        if "[" in value or "]" in value:
+            continue
+        if any(term in lowered for term in [
+            "python", "machine learning", "data engineering", "basic sql", "rag",
+            "langchain", "systemverilog", "verilog", "uvm", "rtl", "fpga",
+            "soc", "asic", "faiss", "groq", "gemini", "cohere", "hugging face"
+        ]):
+            continue
+
+        if label == "PERSON":
+            replacements.append((ent.start_char, ent.end_char, "[Candidate]"))
+        elif label in {"ORG", "GPE", "LOC", "FAC"}:
+            # This hides school/location/company-like identifiers for bias reduction.
+            # Technical evidence is kept by the allow-list above.
+            replacements.append((ent.start_char, ent.end_char, "[Entity]"))
+        elif label in {"NORP"}:
+            replacements.append((ent.start_char, ent.end_char, "[demographic]") )
+
+    for start, end, repl in reversed(replacements):
+        text = text[:start] + repl + text[end:]
+    return text
+
+
 def anonymise_text(text: str) -> str:
     """Strip PII from a CV so the LLM scores on skills and experience.
 
@@ -579,6 +652,7 @@ def anonymise_text(text: str) -> str:
 
     # 5. Institutions and demographics
     text = _INSTITUTION.sub("[Institution]", text)
+    text = _apply_ner_anonymisation(text)
     text = _DOB.sub("[dob]", text)
     text = _MARITAL.sub("[marital-status]", text)
     text = _LANGUAGE.sub("[language]", text)
@@ -679,8 +753,9 @@ def screen_candidates(
             if progress_callback:
                 progress_callback(step, total_pairs, jd_name, cv_name)
 
+            rag_evidence = []
             if use_rag:
-                ctx = _get_rag_context(chunks, emb, cv_name, cleaned_jd[:500])
+                ctx, rag_evidence = _get_rag_context_and_evidence(chunks, emb, cv_name, cleaned_jd[:500])
                 prompt = build_rag_prompt(cleaned_jd, cv_name, ctx)
             else:
                 prompt = build_user_prompt(cleaned_jd, cv_name, cleaned_cv)
@@ -698,6 +773,7 @@ def screen_candidates(
                 "skills": extract_section(output, ["Matching Skills"]),
                 "gaps": extract_section(output, ["Missing / Weak Areas", "Missing Areas", "Weak Areas"]),
                 "mode": ("RAG" if use_rag else "Direct") + (" · Anon" if anonymise else ""),
+                "rag_evidence": rag_evidence,
             })
             if delay:
                 time.sleep(delay)

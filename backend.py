@@ -13,14 +13,13 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
-# Optional local NER support. If spaCy/model is unavailable, the app still works
-# using regex-only anonymisation, so deployment/demo will not break.
-try:
-    import spacy
-except Exception:
-    spacy = None
+# Stable deployment note:
+# spaCy/NER is intentionally disabled in this Render-free-tier build because it
+# made the app slow/heavy. Regex anonymisation remains active for emails, phones,
+# addresses, institutions, DOB, emergency contacts and sensitive labels.
+# NER can be presented as a future enhancement or enabled later on a stronger host.
 
-VERSION = "v3.4-upload-accounts"  # bump this when you redeploy to confirm Render picked up the new file
+VERSION = "v3.6-stable-lite"  # bump this when you redeploy to confirm Render picked up the new file
 
 QWEN_MODEL = "qwen/qwen3-32b"
 FINAL_CHUNK_SIZE = 700
@@ -184,19 +183,39 @@ def extract_score(text: str):
 
 
 def extract_section(text: str, names: List[str]) -> str:
+    """Extract a short section from an LLM report without swallowing the full report.
+
+    Supports headings written as `Candidate Summary:`, `**Candidate Summary**`,
+    or `### Candidate Summary`. The returned text is flattened only after the
+    correct section boundary is found, so the result card stays short.
+    """
     if not isinstance(text, str):
         return ""
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-    escaped = [re.escape(n) for n in names]
-    pattern = (
-        r"(?is)(?:^|\n)\s*(%s)\s*:\s*(.*?)"
-        r"(?=\n\s*(?:Candidate Summary|Matching Skills|Missing\s*/\s*Weak Areas"
-        r"|Missing Areas|Weak Areas|Suitability Score|Overall Score|Final Score)\s*:|\Z)"
-    ) % "|".join(escaped)
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+
+    all_headings = [
+        "Candidate Summary", "Must-Have Skills Match", "Nice-to-Have Skills Match",
+        "Experience Assessment", "Key Gaps", "Suitability Score", "Scoring rationale",
+        "Recommendation", "Matching Skills", "Missing / Weak Areas", "Missing Areas", "Weak Areas",
+        "Overall Score", "Final Score",
+    ]
+
+    def heading_regex(label: str) -> str:
+        return rf"(?:^|\n|\s{{2,}})\s*(?:[#>*_\-\s]*)\**\s*{re.escape(label)}\s*\**\s*[:\-–]?"
+
+    target = "|".join(heading_regex(n) for n in names)
+    next_heads = "|".join(heading_regex(h) for h in all_headings if h not in names)
+    pattern = rf"(?is)({target})\s*(.*?)(?=({next_heads})|\Z)"
     m = re.search(pattern, cleaned)
     if not m:
         return ""
-    return re.sub(r"\s+", " ", m.group(2)).strip(" -\n\t")
+
+    section = m.group(2).strip(" -:\n\t")
+    # Remove markdown table separators from short cards; full report is kept separately.
+    section = re.sub(r"\|?\s*-{3,}\s*\|?", " ", section)
+    section = re.sub(r"\s+", " ", section).strip()
+    return section[:700]
 
 
 def fmt_name(filename: str) -> str:
@@ -560,67 +579,21 @@ def _redact_header_names(text: str, max_lines: int = 14) -> str:
 _NLP = None
 
 def get_ner_model():
-    """Load spaCy NER lazily. Returns None if spaCy/model is unavailable."""
-    global _NLP
-    if spacy is None:
-        return None
-    if _NLP is None:
-        try:
-            _NLP = spacy.load("en_core_web_sm")
-        except Exception:
-            _NLP = None
-    return _NLP
+    """NER disabled for stable Render deployment."""
+    return None
 
 
 def _apply_ner_anonymisation(text: str) -> str:
-    """Hybrid anonymisation: regex handles fixed PII; NER helps with names/orgs/locations.
-
-    This is intentionally conservative and optional. If the NER model cannot load,
-    it returns the original text so regex-only anonymisation still works.
-    """
-    nlp = get_ner_model()
-    if nlp is None or not text.strip():
-        return text
-
-    doc = nlp(text)
-    replacements = []
-    for ent in doc.ents:
-        label = ent.label_
-        value = ent.text.strip()
-        if not value or len(value) < 3:
-            continue
-
-        lowered = value.lower()
-        # Keep technical terms and already-redacted labels.
-        if "[" in value or "]" in value:
-            continue
-        if any(term in lowered for term in [
-            "python", "machine learning", "data engineering", "basic sql", "rag",
-            "langchain", "systemverilog", "verilog", "uvm", "rtl", "fpga",
-            "soc", "asic", "faiss", "groq", "gemini", "cohere", "hugging face"
-        ]):
-            continue
-
-        if label == "PERSON":
-            replacements.append((ent.start_char, ent.end_char, "[Candidate]"))
-        elif label in {"ORG", "GPE", "LOC", "FAC"}:
-            # This hides school/location/company-like identifiers for bias reduction.
-            # Technical evidence is kept by the allow-list above.
-            replacements.append((ent.start_char, ent.end_char, "[Entity]"))
-        elif label in {"NORP"}:
-            replacements.append((ent.start_char, ent.end_char, "[demographic]") )
-
-    for start, end, repl in reversed(replacements):
-        text = text[:start] + repl + text[end:]
+    """No-op in stable build. Regex anonymisation handles the deployed prototype."""
     return text
 
 
 def anonymise_text(text: str) -> str:
-    """Strip PII from a CV so the LLM scores on skills and experience.
+    """Strip PII from a CV using lightweight regex rules.
 
-    This version is intentionally conservative: it removes clear PII while keeping
-    job-relevant content such as degrees, technical skills, awards, job titles,
-    company names, tools, and project descriptions.
+    This stable version removes clear PII while keeping job-relevant content such
+    as degrees, technical skills, awards, job titles, company names, tools, and
+    project descriptions. NER is disabled in deployment to keep Render fast.
     """
     if not isinstance(text, str):
         text = str(text)
@@ -804,7 +777,7 @@ def screen_candidates(
     if not cv_files:
         raise ValueError("No CV files loaded.")
 
-    groq_client = Groq(api_key=groq_key.strip())
+    groq_client = Groq(api_key=groq_key.strip(), timeout=35.0)
 
     # Apply anonymisation to CV text before chunking/screening if requested.
     # IMPORTANT: anonymise_text() must run on the RAW (un-preprocessed) text so
@@ -873,9 +846,9 @@ def build_chat_context(raw_jd_texts, raw_cv_texts, results) -> str:
     free-tier per-request limit (~6 000 TPM / ~32 000 token context window).
     Rough budget: context ≤ 1 800 tokens ≈ 7 200 characters."""
 
-    MAX_SUMMARY = 120   # chars per field
-    MAX_SKILLS  = 100
-    MAX_GAPS    = 100
+    MAX_SUMMARY = 80   # chars per field; keep chat fast/stable
+    MAX_SKILLS  = 70
+    MAX_GAPS    = 70
 
     ctx = ""
 
@@ -890,10 +863,18 @@ def build_chat_context(raw_jd_texts, raw_cv_texts, results) -> str:
             ctx += f"  - {name}\n"
 
     if results:
-        ctx += "\n=== SCREENING RESULTS ===\n"
+        ctx += "\n=== SCREENING RESULTS (compact summaries only) ===\n"
+        rows_added = 0
+        max_rows = 20
         for jd_name, rows in results.items():
+            if rows_added >= max_rows:
+                break
             ctx += f"\nJD: {jd_name}\n"
             for row in rows:
+                if rows_added >= max_rows:
+                    ctx += "  ...more results hidden to keep chat fast...\n"
+                    break
+                rows_added += 1
                 score_str = f"{row['score']}/10" if row['score'] is not None else "N/A"
                 verdict   = verdict_label(row['score'])[0]
                 ctx += (
@@ -921,7 +902,7 @@ def generate_shortlist_email(
     if not groq_key or not groq_key.strip():
         raise ValueError("Groq API key is required.")
 
-    client = Groq(api_key=groq_key.strip())
+    client = Groq(api_key=groq_key.strip(), timeout=35.0)
     prompt = (
         f"Write a professional, warm interview invitation email to a candidate.\n\n"
         f"Candidate name: {candidate_name}\n"
@@ -965,7 +946,7 @@ def ask_about_candidates(
     if not groq_key or not groq_key.strip():
         raise ValueError("Groq API key is required.")
 
-    client = Groq(api_key=groq_key.strip())
+    client = Groq(api_key=groq_key.strip(), timeout=35.0)
 
     messages = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT}]
     if context:
@@ -986,7 +967,7 @@ def ask_about_candidates(
         model=QWEN_MODEL,
         messages=messages,
         temperature=0.2,
-        max_tokens=1024,
+        max_tokens=500,
     )
     raw = response.choices[0].message.content
     # Strip any <think>...</think> blocks just in case

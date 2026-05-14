@@ -1,5 +1,5 @@
 """
-TalentLens — Streamlit frontend (v6)
+TalentLens — Streamlit frontend (v6.1)
 All AI/RAG/screening logic lives in backend.py
 """
 
@@ -311,6 +311,46 @@ REQUEST_DELAY = 1
 def fmt_name(filename: str) -> str:
     return Path(filename).stem.replace("_", " ").replace("-", " ")
 
+def strip_think(text: str) -> str:
+    """Remove Qwen thinking blocks without destroying markdown formatting."""
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+
+def shorten_text(text: str, limit: int = 420) -> str:
+    """Make a short card summary while keeping the full report untouched."""
+    cleaned = re.sub(r"\s+", " ", strip_think(text)).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rsplit(" ", 1)[0] + "..."
+
+
+def clean_ai_report(text: str) -> str:
+    """Prepare the full AI report for Streamlit markdown display.
+
+    The LLM sometimes returns markdown headings/tables, while some previous UI
+    displays flattened the report into one paragraph. This function keeps real
+    newlines when present and adds spacing before common headings so the full
+    evaluation is readable in the Results tab.
+    """
+    cleaned = strip_think(text)
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    # Add spacing before markdown headings if the model placed them inline.
+    headings = [
+        "Candidate Summary", "Must-Have Skills Match", "Nice-to-Have Skills Match",
+        "Experience Assessment", "Key Gaps", "Suitability Score", "Scoring rationale",
+        "Recommendation", "Matching Skills", "Missing / Weak Areas", "Missing Areas", "Weak Areas",
+    ]
+    for h in headings:
+        cleaned = re.sub(rf"\s*(\*\*{re.escape(h)}\*\*)", r"\n\n\1", cleaned)
+        cleaned = re.sub(rf"(?<!\n)\b({re.escape(h)}\s*:)", r"\n\n\1", cleaned)
+    # If table rows got lightly flattened, at least separate row markers for readability.
+    cleaned = re.sub(r"\s+(\|\s*-{3,})", r"\n\1", cleaned)
+    cleaned = re.sub(r"(\|)\s+(\|\s*[A-Za-z*])", r"\1\n\2", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
 def verdict_label(score):
     if score is None: return "Unknown",      "v-weak"
     if score >= 8:    return "Strong Match",  "v-strong"
@@ -602,7 +642,7 @@ with tab_run:
                     help="Shows the anonymised CV text that will be sent to the AI. Use this to verify PII has been removed.",
                 )
                 if show_anon_preview:
-                    st.caption("Preview of anonymised CV text. Page view is easier to inspect; LLM view shows the compact processed text used for screening.")
+                    st.caption("Preview of anonymised CV text. Page view is easier to inspect and can be selected/copied; LLM view shows the compact processed text used for screening.")
                     for name in st.session_state.cv_files:
                         raw = st.session_state.raw_cv_texts.get(name, "")
                         anon_page = backend.anonymise_text(raw).strip() if raw else "(no raw text available)"
@@ -616,7 +656,7 @@ with tab_run:
                                     "Anonymised CV page view",
                                     value=anon_page[:6000],
                                     height=520,
-                                    disabled=True,
+                                    disabled=False,
                                     label_visibility="collapsed",
                                 )
 
@@ -625,7 +665,7 @@ with tab_run:
                                     "Compact text sent to LLM after preprocessing",
                                     value=anon_llm[:6000],
                                     height=300,
-                                    disabled=True,
+                                    disabled=False,
                                     label_visibility="collapsed",
                                 )
 
@@ -715,18 +755,16 @@ with tab_res:
             verdict, vcls = verdict_label(best["score"])
             color   = score_color(best["score"])
             rec     = extract_recommendation(best.get("output", ""))
-            small_open = '<small style="opacity:0.8">'
-            small_close = '</small>'
-            summary_html = f"{small_open}{best['summary']}{small_close}" if best.get("summary") else ""
             st.markdown(
                 f'<div class="card-hero">'
                 f'<span class="best-badge">⭐ Best Match</span>&nbsp;&nbsp;{rec_badge(rec)}<br>'
                 f'<span style="font-size:1.4rem;font-weight:800">{display_cv_name(best["cv_name"])}</span>'
                 f'&nbsp;<span style="opacity:0.5;font-size:0.9rem">Score: <span style="color:{color};font-weight:700">{best["score"]}/10</span></span><br>'
-                f'<span class="verdict {vcls}">{verdict}</span><br>'
-                f'{summary_html}'
+                f'<span class="verdict {vcls}">{verdict}</span>'
                 f'</div>', unsafe_allow_html=True
             )
+            if best.get("summary"):
+                st.info(shorten_text(best["summary"], 420))
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CVs Shown",     len(filtered))
             m2.metric("Best Score",    f"{max(scores):.1f}/10" if scores else "—")
@@ -779,8 +817,15 @@ with tab_res:
                             st.progress(float(r["score"]) / 10.0)
 
                     with st.expander("📋 Full AI Evaluation"):
-                        clean = re.sub(r"<think>.*?</think>", "", r["output"], flags=re.DOTALL | re.IGNORECASE).strip()
+                        clean = clean_ai_report(r.get("output", ""))
                         st.markdown(clean)
+                        st.download_button(
+                            "⬇️ Download this report",
+                            clean,
+                            file_name=f"talentlens_{Path(r['cv_name']).stem}_report.txt",
+                            mime="text/plain",
+                            key=f"download_report_{sel_jd}_{r['cv_name']}",
+                        )
 
                     if r.get("rag_evidence"):
                         with st.expander("🔎 Explainability: Retrieved RAG Evidence"):
@@ -1051,17 +1096,44 @@ with tab_matrix:
 with tab_chat:
     st.markdown("## 💬 Ask About Candidates")
     st.caption("Ask anything — CV details, compare candidates, generate interview questions, etc.")
+    st.caption("Chat now uses compact score summaries only, so it should be faster and less likely to freeze on Render free tier.")
 
     if not st.session_state.groq_key:
         st.markdown('<div class="warn-box">👈 Set your Groq API key in the sidebar first.</div>', unsafe_allow_html=True)
     else:
+        def local_best_candidate_answer(question: str):
+            qlow = question.lower().strip()
+            if "best candidate" not in qlow or not st.session_state.results:
+                return None
+            all_rows = []
+            for jd_name, rows in st.session_state.results.items():
+                for row in rows:
+                    if row.get("score") is not None:
+                        all_rows.append((jd_name, row))
+            if not all_rows:
+                return None
+            jd_name, best = max(all_rows, key=lambda x: x[1].get("score") or 0)
+            name = display_cv_name(best.get("cv_name", "Candidate"))
+            score = best.get("score")
+            summary = shorten_text(best.get("summary") or best.get("output", ""), 350)
+            gaps = shorten_text(best.get("gaps") or "No major gaps extracted.", 180)
+            return (
+                f"**Best candidate:** {name} for **{fmt_name(jd_name)}** with a score of **{score}/10**.\n\n"
+                f"**Why:** {summary}\n\n"
+                f"**Main gaps to note:** {gaps}"
+            )
+
         def run_chat_llm(question: str):
+            quick_local = local_best_candidate_answer(question)
+            if quick_local:
+                st.session_state.chat_history.append({"role": "assistant", "content": quick_local})
+                return
             context = backend.build_chat_context(
                 raw_jd_texts=st.session_state.raw_jd_texts,
-                raw_cv_texts=anonymised_cv_texts_for_chat(),
+                raw_cv_texts={},
                 results=st.session_state.results,
             )
-            recent_history = st.session_state.chat_history[-8:]
+            recent_history = st.session_state.chat_history[-4:]
             try:
                 reply = backend.ask_about_candidates(
                     groq_key=st.session_state.groq_key,

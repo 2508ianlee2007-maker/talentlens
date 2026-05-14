@@ -13,7 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
-VERSION = "v3.0-improvements"  # bump this when you redeploy to confirm Render picked up the new file
+VERSION = "v3.1-anonymise-fix"  # bump this when you redeploy to confirm Render picked up the new file
 
 QWEN_MODEL = "qwen/qwen3-32b"
 FINAL_CHUNK_SIZE = 700
@@ -314,6 +314,12 @@ def _call_llm(client: Groq, prompt: str, retries: int = 3, base_delay: float = 5
 # NOTE: anonymise_text() must be called on RAW text (before preprocess_text),
 # because preprocess_text lowercases and strips punctuation, which breaks
 # capitalised-name detection and email/URL matching.
+#
+# v3.1 fix: do NOT globally redact every Title Case / ALL CAPS phrase.
+# That was over-censoring useful CV content such as "DIPLOMA IN AI",
+# "Python Programming", "National Day", "Basic SQL", and job titles.
+# Names are now removed only from likely name positions such as CV headers,
+# labelled "Name:" fields, emergency contacts, and title-prefixed names.
 
 # ── Emails: standard + obfuscated variants ────────────────────────────────────
 _EMAIL = re.compile(
@@ -348,9 +354,10 @@ _SG_ADDR = re.compile(
 
 # ── Generic street addresses ──────────────────────────────────────────────────
 _STREET_ADDR = re.compile(
-    r"\b\d+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\s+"
+    r"\b\d+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,5}\s+"
     r"(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Lane|Ln|Way|Close|Crescent|Cres|"
-    r"Place|Pl|Court|Ct|Boulevard|Blvd|Walk|Rise|View|Hill|Gardens|Park)\b",
+    r"Place|Pl|Court|Ct|Boulevard|Blvd|Walk|Rise|View|Hill|Gardens|Park)\b"
+    r"(?:\s+\d+)?",
     re.IGNORECASE,
 )
 
@@ -362,117 +369,197 @@ _URL = re.compile(
     re.IGNORECASE,
 )
 
-# ── Name titles ───────────────────────────────────────────────────────────────
-_NAME_TITLES = re.compile(
-    r"\b(mr|mrs|ms|miss|dr|prof|sir|assoc\.?\s+prof)\.?\s+",
+# ── Labelled names and title-prefixed names ───────────────────────────────────
+_LABELLED_NAME = re.compile(
+    r"(?im)^(\s*(?:[▪•\-]\s*)?(?:name|candidate\s+name|full\s+name)\s*[:\-]\s*)[^\n\r]+"
+)
+_NAME_WITH_TITLE = re.compile(
+    r"\b(?:mr|mrs|ms|miss|dr|prof|sir|assoc\.?\s+prof)\.?\s+"
+    r"[A-Z][A-Za-z'\-]{1,25}(?:\s+[A-Z][A-Za-z'\-]{1,25}){0,3}\b"
+)
+
+# ── Section headings / words that must never be treated as names ──────────────
+_HEADER_STOPWORDS = {
+    "contact", "coordonnées", "top skills", "principales compétences", "skills",
+    "languages", "language", "experience", "professional experience", "education",
+    "summary", "objective", "overview", "technical", "soft skill", "honors",
+    "honors-awards", "honors & awards", "awards", "awards / achievements",
+    "work experience", "relevant competencies / skills", "computer literacy",
+    "communication skills", "management and leadership skills", "licensures & certifications",
+    "emergency contacts", "official closed and non-sensitive", "official closed and non sensitive",
+}
+
+_NON_NAME_WORDS = {
+    # CV / section words
+    "official", "closed", "non", "sensitive", "contact", "education", "experience",
+    "skills", "languages", "summary", "objective", "overview", "technical", "project",
+    "projects", "achievement", "achievements", "awards", "honors", "activities",
+    "volunteer", "certifications", "licensures", "competencies", "literacy",
+    "communication", "management", "leadership", "relationship", "mother", "father",
+    # tech / education words
+    "diploma", "degree", "bachelor", "master", "engineering", "engineer", "science",
+    "computer", "data", "ai", "machine", "learning", "python", "programming", "basic",
+    "sql", "rag", "langchain", "nlp", "llm", "electronics", "electrical", "digital",
+    "analog", "verilog", "systemverilog", "uvm", "rtl", "fpga", "soc", "asic",
+    "vlsi", "eda", "linux", "perl", "tcl", "bash", "cadence", "synopsys",
+    "mentor", "vcs", "verdi", "innovus", "primetime", "synthesis", "floorplan",
+    "floorplanning", "place", "route", "timing", "power", "coverage", "simulation",
+    # company / location / date words should not trigger name redaction alone
+    "server", "staff", "part", "time", "national", "day", "defense", "audio", "setup",
+}
+
+# ── Institutions (specific enough to avoid eating education titles) ───────────
+_INSTITUTION = re.compile(
+    r"\b[A-Z][A-Za-z&.'\-]*(?:\s+[A-Z][A-Za-z&.'\-]*){0,5}\s+"
+    r"(?:University|Polytechnic|College|Academy|School|Institute(?:\s+of\s+Technology)?)\b"
+    r"(?:\s+of\s+[A-Z][A-Za-z&.'\-]*(?:\s+[A-Z][A-Za-z&.'\-]*){0,4})?"
+    r"(?:,?\s+(?:Singapore|Malaysia|Vietnam|India|China|Korea|Japan|USA|United\s+States))?",
     re.IGNORECASE,
 )
 
-# ── ALL-CAPS names: "JOHN SMITH", "TAN WEI MING", up to 4 words ──────────────
-# Short abbreviations (AI, NLP, SQL etc.) are 1 word so won't match.
-_ALLCAPS_NAME = re.compile(r"\b([A-Z]{2,15})(?:\s+[A-Z]{2,15}){1,3}\b")
-
-# ── Whitelisted title-case phrases that look like names but aren't ────────────
-_NAME_WHITELIST = re.compile(
-    r"^("
-    r"Software Engineer|Hardware Engineer|Data Scientist|Data Analyst|"
-    r"Machine Learning|Deep Learning|Computer Science|Electrical Engineering|"
-    r"Civil Engineering|Mechanical Engineering|Chemical Engineering|"
-    r"Project Manager|Product Manager|Business Analyst|Systems Engineer|"
-    r"Network Engineer|Security Engineer|Cloud Engineer|DevOps Engineer|"
-    r"Full Stack|Front End|Back End|Quality Assurance|Test Engineer|"
-    r"Research Engineer|Research Scientist|Senior Engineer|Junior Engineer|"
-    r"Team Lead|Tech Lead|Chief Executive|Chief Technology|Chief Financial|"
-    r"Vice President|Managing Director|General Manager|"
-    r"New York|San Francisco|Los Angeles|Hong Kong|Kuala Lumpur|"
-    r"South Korea|North America|South East|South Asia|"
-    r"January|February|March|April|June|July|August|September|October|"
-    r"November|December|Bachelor|Master|Doctor|Honours|"
-    r"National Service|Civil Service|"
-    r"GCE O|GCE A|Net Aggregate|Non Sensitive|Officially Closed"
-    r")$",
-    re.IGNORECASE,
-)
-
-# ── Title-case names: "John Smith", "Wei Ming Tan" ────────────────────────────
-_PROPER_NAME = re.compile(r"\b([A-Z][a-z]{1,20})(?:\s+[A-Z][a-z]{1,20}){1,3}\b")
-
-def _safe_name_sub(m: re.Match) -> str:
-    if _NAME_WHITELIST.match(m.group(0).strip()):
-        return m.group(0)
-    return "[Candidate]"
-
-# ── Universities / institutions (run BEFORE name matching) ────────────────────
-_UNIVERSITY = re.compile(
-    r"\b(?:[A-Z][\w]*\s+)*(?:university|polytechnic|institute\s+of\s+technology)\b"
-    r"(?:\s+of\s+[\w\s]{1,30})?"   # "of Singapore/Technology"
-    r"(?:\s+[A-Z][a-z]+)*",           # trailing location words e.g. "Singapore"
-    re.IGNORECASE,
-)
-_COLLEGE = re.compile(r"\b[A-Z][\w\s]{0,30}(?:college|academy|school)\b")
-
-# ── Gendered pronouns ──────────────────────────────────────────────────────────
-_PRONOUNS = re.compile(r"\b(he|him|his|she|her|hers|himself|herself)\b", re.IGNORECASE)
-
-# ── NRIC / national ID ────────────────────────────────────────────────────────
-_NRIC = re.compile(r"\b[STFG]\d{7}[A-Z]\b", re.IGNORECASE)
-
-# ── Nationality / race / Chinese dialects ─────────────────────────────────────
+# ── Nationality / race / non-required language markers ────────────────────────
+# Keep English because many JDs require English communication skills.
 _NATIONALITY = re.compile(
     r"\b(singaporean|malaysian|indonesian|filipino|vietnamese|burmese|"
     r"thai|chinese|indian|malay|eurasian|caucasian|american|british|"
     r"australian|canadian|korean|japanese|"
-    r"mandarin|tamil|hokkien|cantonese|teochew|hakka)\b",
+    r"mandarin|tamil|hokkien|cantonese|teochew|hakka|marathi|hindi)\b",
     re.IGNORECASE,
 )
 
-# ── Date of birth / age ───────────────────────────────────────────────────────
+# ── Date of birth / age / marital status / national ID ───────────────────────
+_NRIC = re.compile(r"\b[STFG]\d{7}[A-Z]\b", re.IGNORECASE)
 _DOB = re.compile(
     r"\b(?:date\s+of\s+birth|d\.?o\.?b\.?|age|born\s+(?:in|on))"
     r"\s*[:\-]?\s*[\d/\-\w,\s]{0,30}",
     re.IGNORECASE,
 )
-
-# ── Marital status ────────────────────────────────────────────────────────────
 _MARITAL = re.compile(
     r"\b(single|married|divorced|widowed|marital\s+status\s*[:\-]?\s*\w+)\b",
     re.IGNORECASE,
 )
+_RELATIONSHIP = re.compile(r"(?im)^(\s*(?:[▪•\-]\s*)?relationship\s*[:\-]\s*)[^\n\r]+")
+_CONTACT_NO = re.compile(r"(?im)^(\s*(?:[▪•\-]\s*)?(?:contact\s+no|mobile|phone|home)\s*[:\-]\s*)[^\n\r]+")
+
+_PRONOUN_MAP = {
+    "he": "they", "she": "they",
+    "him": "them", "her": "them",
+    "his": "their", "hers": "theirs",
+    "himself": "themself", "herself": "themself",
+}
+_PRONOUNS = re.compile(r"\b(he|him|his|she|her|hers|himself|herself)\b", re.IGNORECASE)
+
+
+def _replace_pronoun(match: re.Match) -> str:
+    return _PRONOUN_MAP.get(match.group(1).lower(), "they")
+
+
+def _looks_like_standalone_name(line: str) -> bool:
+    """Return True only for likely standalone personal names in the CV header.
+
+    This deliberately avoids global name matching, because CVs contain many useful
+    Title Case phrases that look name-like but are actually skills, awards, job
+    titles, activities, or section headings.
+    """
+    cleaned = re.sub(r"^[\s▪•\-:]+|[\s:]+$", "", line).strip()
+    lowered = re.sub(r"\s+", " ", cleaned.lower())
+
+    if not cleaned or lowered in _HEADER_STOPWORDS:
+        return False
+    if any(ch.isdigit() for ch in cleaned):
+        return False
+    if any(sym in cleaned for sym in ["@", "/", "|", "(", ")", ":", ",", "."]):
+        return False
+
+    words = cleaned.split()
+    if not (2 <= len(words) <= 4):
+        return False
+
+    word_lowers = {re.sub(r"[^a-z]", "", w.lower()) for w in words}
+    if word_lowers & _NON_NAME_WORDS:
+        return False
+
+    # Avoid phrases such as "Staff Design Verification", "Physical Design Engineer".
+    job_or_skill_words = {
+        "engineer", "verification", "design", "physical", "staff", "senior", "junior",
+        "leader", "manager", "developer", "analyst", "scientist", "consultant",
+        "server", "assistant", "technician", "specialist", "intern", "trainee",
+    }
+    if word_lowers & job_or_skill_words:
+        return False
+
+    # Names usually have title case or all caps words, not random lowercase phrases.
+    return all(re.match(r"^[A-Z][A-Za-z'\-]{1,25}$", w) or re.match(r"^[A-Z]{2,25}$", w) for w in words)
+
+
+def _redact_header_names(text: str, max_lines: int = 14) -> str:
+    """Redact likely candidate names in the first few lines only."""
+    lines = text.splitlines()
+    limit = min(max_lines, len(lines))
+    previous_was_contact_heading = False
+
+    for i in range(limit):
+        raw_line = lines[i]
+        stripped = raw_line.strip()
+        lowered = re.sub(r"\s+", " ", stripped.lower())
+
+        if lowered in {"contact", "coordonnées"}:
+            previous_was_contact_heading = True
+            continue
+
+        if _looks_like_standalone_name(stripped):
+            # Redact if it is very near the top, or directly under a Contact heading.
+            if i <= 4 or previous_was_contact_heading:
+                leading = re.match(r"^\s*", raw_line).group(0)
+                lines[i] = leading + "[Candidate]"
+                previous_was_contact_heading = False
+                continue
+
+        # Keep the contact-heading flag for one meaningful line only.
+        if stripped:
+            previous_was_contact_heading = False
+
+    return "\n".join(lines)
 
 
 def anonymise_text(text: str) -> str:
-    """Strip PII from a CV so the LLM scores on skills alone, not identity.
+    """Strip PII from a CV so the LLM scores on skills and experience.
 
-    IMPORTANT: call this on the RAW extracted text, before preprocess_text(),
-    so that capitalisation, @ symbols, phone digits and address formats are intact.
+    This version is intentionally conservative: it removes clear PII while keeping
+    job-relevant content such as degrees, technical skills, awards, job titles,
+    company names, tools, and project descriptions.
     """
-    # 1. Contacts & links
+    if not isinstance(text, str):
+        text = str(text)
+
+    # 1. Contact info and IDs
     text = _EMAIL.sub("[email]", text)
     text = _URL.sub("[url]", text)
     text = _PHONE.sub("[phone]", text)
-    text = _NRIC.sub("[ID]", text)
+    text = _NRIC.sub("[id]", text)
 
-    # 2. Address components (before name matching)
+    # 2. Addresses
     text = _SG_ADDR.sub("[address]", text)
     text = _STREET_ADDR.sub("[address]", text)
     text = _SG_POSTAL.sub("[postal]", text)
 
-    # 3. Demographic markers
+    # 3. Labelled personal fields and emergency-contact fields
+    text = _LABELLED_NAME.sub(lambda m: m.group(1) + "[Candidate]", text)
+    text = _RELATIONSHIP.sub(lambda m: m.group(1) + "[relationship]", text)
+    text = _CONTACT_NO.sub(lambda m: m.group(1) + "[phone]", text)
+    text = _NAME_WITH_TITLE.sub("[Candidate]", text)
+
+    # 4. Candidate name in CV header only, not the whole document
+    text = _redact_header_names(text)
+
+    # 5. Institutions and demographics
+    text = _INSTITUTION.sub("[Institution]", text)
     text = _DOB.sub("[dob]", text)
     text = _MARITAL.sub("[marital-status]", text)
     text = _NATIONALITY.sub("[nationality]", text)
 
-    # 4. Institutions BEFORE names
-    text = _UNIVERSITY.sub("[University]", text)
-    text = _COLLEGE.sub("[Institution]", text)
-
-    # 5. Titles then names
-    text = _NAME_TITLES.sub("", text)
-    text = _ALLCAPS_NAME.sub("[Candidate]", text)
-    text = _PROPER_NAME.sub(_safe_name_sub, text)
-
-    # 6. Pronouns
-    text = _PRONOUNS.sub("they", text)
+    # 6. Pronouns: replace with neutral forms instead of deleting meaning
+    text = _PRONOUNS.sub(_replace_pronoun, text)
 
     return text
 # ── INPUT VALIDATION ──────────────────────────────────────────────────────────

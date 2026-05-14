@@ -1,11 +1,12 @@
 """
-TalentLens — Streamlit frontend (v6.1)
+TalentLens — Streamlit frontend (v7 HR shared-results workflow)
 All AI/RAG/screening logic lives in backend.py
 """
 
 import re
 import time
 import json
+import os
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -311,46 +312,6 @@ REQUEST_DELAY = 1
 def fmt_name(filename: str) -> str:
     return Path(filename).stem.replace("_", " ").replace("-", " ")
 
-def strip_think(text: str) -> str:
-    """Remove Qwen thinking blocks without destroying markdown formatting."""
-    if not isinstance(text, str):
-        return ""
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-
-
-def shorten_text(text: str, limit: int = 420) -> str:
-    """Make a short card summary while keeping the full report untouched."""
-    cleaned = re.sub(r"\s+", " ", strip_think(text)).strip()
-    if len(cleaned) <= limit:
-        return cleaned
-    return cleaned[:limit].rsplit(" ", 1)[0] + "..."
-
-
-def clean_ai_report(text: str) -> str:
-    """Prepare the full AI report for Streamlit markdown display.
-
-    The LLM sometimes returns markdown headings/tables, while some previous UI
-    displays flattened the report into one paragraph. This function keeps real
-    newlines when present and adds spacing before common headings so the full
-    evaluation is readable in the Results tab.
-    """
-    cleaned = strip_think(text)
-    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
-    # Add spacing before markdown headings if the model placed them inline.
-    headings = [
-        "Candidate Summary", "Must-Have Skills Match", "Nice-to-Have Skills Match",
-        "Experience Assessment", "Key Gaps", "Suitability Score", "Scoring rationale",
-        "Recommendation", "Matching Skills", "Missing / Weak Areas", "Missing Areas", "Weak Areas",
-    ]
-    for h in headings:
-        cleaned = re.sub(rf"\s*(\*\*{re.escape(h)}\*\*)", r"\n\n\1", cleaned)
-        cleaned = re.sub(rf"(?<!\n)\b({re.escape(h)}\s*:)", r"\n\n\1", cleaned)
-    # If table rows got lightly flattened, at least separate row markers for readability.
-    cleaned = re.sub(r"\s+(\|\s*-{3,})", r"\n\1", cleaned)
-    cleaned = re.sub(r"(\|)\s+(\|\s*[A-Za-z*])", r"\1\n\2", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned
-
 def verdict_label(score):
     if score is None: return "Unknown",      "v-weak"
     if score >= 8:    return "Strong Match",  "v-strong"
@@ -377,6 +338,75 @@ def rec_badge(rec: str) -> str:
     icon = {"advance": "✅", "hold": "⏸️", "reject": "❌"}.get(rec.lower(), "")
     return f'<span class="{cls}">{icon} {rec}</span>' if cls else ""
 
+
+# ─── ROLE / ACCOUNT HELPERS ──────────────────────────────────────────────────
+USERS_FILE = "users.json"
+DEFAULT_USERS = {
+    "hr_admin": {"password": "hr123", "role": "HR"},
+    "dept_user": {"password": "dept123", "role": "DEPARTMENT"},
+}
+
+def load_users() -> dict:
+    if not os.path.exists(USERS_FILE):
+        return DEFAULT_USERS.copy()
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            users = json.load(f)
+        if not isinstance(users, dict):
+            return DEFAULT_USERS.copy()
+        for username, info in DEFAULT_USERS.items():
+            users.setdefault(username, info)
+        return users
+    except Exception:
+        return DEFAULT_USERS.copy()
+
+def save_users(users: dict) -> None:
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, indent=2)
+
+def login_screen():
+    st.markdown("## 🔍 TalentLens Login")
+    st.caption("Role-based access: HR manages original CVs; department users only view shared anonymised results.")
+    users = load_users()
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login", type="primary", use_container_width=True):
+            user = users.get(username.strip())
+            if user and password == user.get("password"):
+                st.session_state.logged_in = True
+                st.session_state.username = username.strip()
+                st.session_state.role = user.get("role", "DEPARTMENT")
+                if st.session_state.role == "DEPARTMENT":
+                    shared = backend.load_department_results()
+                    if shared:
+                        st.session_state.results = shared
+                        st.session_state.analysis_done = True
+                        st.session_state.files_loaded = False
+                st.rerun()
+            else:
+                st.error("Invalid username or password")
+    with c2:
+        st.markdown("""
+        **Demo accounts**
+        - HR: `hr_admin` / `hr123`
+        - Department: `dept_user` / `dept123`
+
+        HR uploads and runs screening first. Department users then log in later to view shared anonymised results without uploading CVs.
+        """)
+
+def current_role() -> str:
+    return st.session_state.get("role", "DEPARTMENT")
+
+def is_hr() -> bool:
+    return current_role() == "HR"
+
+def clean_ai_report(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+
 # ─── SESSION STATE ─────────────────────────────────────────────────────────────
 _defaults = {
     "groq_key":      "",
@@ -394,85 +424,25 @@ _defaults = {
     "logged_in":     False,
     "username":      "",
     "role":          "",
-    "hr_feedback":   {},
+    "shared_loaded": False,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ─── ROLE-BASED ACCESS CONTROL ────────────────────────────────────────────────
-USER_DB_PATH = Path("users.json")
-DEFAULT_USERS = {
-    "hr_admin": {"password": "hr123", "role": "HR"},
-    "dept_user": {"password": "dept123", "role": "DEPARTMENT"},
-}
-
-
-def load_users() -> dict:
-    """Load demo/prototype user accounts from users.json if available."""
-    if USER_DB_PATH.exists():
-        try:
-            data = json.loads(USER_DB_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data:
-                return data
-        except Exception:
-            pass
-    return DEFAULT_USERS.copy()
-
-
-def save_users(users: dict) -> None:
-    """Save prototype accounts. For production, use DB + hashed passwords."""
-    USER_DB_PATH.write_text(json.dumps(users, indent=2), encoding="utf-8")
-
-
-USERS = load_users()
-
-def is_hr() -> bool:
-    return st.session_state.get("role") == "HR"
-
-def is_department() -> bool:
-    return st.session_state.get("role") == "DEPARTMENT"
-
-def display_cv_name(filename: str) -> str:
-    """HR sees real filenames; department users see anonymised labels."""
-    if is_hr():
-        return fmt_name(filename)
-    all_names = list(st.session_state.get("cv_files", {}).keys())
-    if filename in all_names:
-        return f"Candidate {all_names.index(filename) + 1}"
-    m = re.search(r"candidate[_\s-]*(\d+)", str(filename), re.IGNORECASE)
-    if m:
-        return f"Candidate {m.group(1)}"
-    return "Candidate"
-
-def anonymised_cv_texts_for_chat():
-    if is_hr():
-        return st.session_state.raw_cv_texts
-    return {
-        display_cv_name(name): backend.anonymise_text(text)
-        for name, text in st.session_state.raw_cv_texts.items()
-    }
-
+# Login gate: stop the app before showing any HR/department data.
 if not st.session_state.logged_in:
-    st.title("🔐 TalentLens Login")
-    st.caption("Role-based access control for fair CV screening")
-    with st.form("login_form"):
-        username = st.text_input("Username", placeholder="hr_admin or dept_user")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
-    if submitted:
-        user = USERS.get(username.strip())
-        if user and password == user["password"]:
-            st.session_state.logged_in = True
-            st.session_state.username = username.strip()
-            st.session_state.role = user["role"]
-            if user["role"] == "DEPARTMENT":
-                st.session_state.anonymise = True
-            st.rerun()
-        else:
-            st.error("Invalid username or password")
-    st.info("Demo accounts: HR = hr_admin / hr123 · Department = dept_user / dept123")
+    login_screen()
     st.stop()
+
+# Department users automatically load HR-shared anonymised results if available.
+if current_role() == "DEPARTMENT" and not st.session_state.shared_loaded:
+    shared = backend.load_department_results()
+    if shared:
+        st.session_state.results = shared
+        st.session_state.analysis_done = True
+        st.session_state.files_loaded = False
+    st.session_state.shared_loaded = True
 
 def reset_all():
     for k in ["jd_files", "cv_files", "raw_jd_texts", "raw_cv_texts", "results", "chat_history"]:
@@ -486,13 +456,13 @@ def reset_all():
 with st.sidebar:
     st.markdown("## 🔍 TalentLens")
     st.caption("Qwen3-32B via Groq · FAISS RAG")
-    st.markdown(f"**Logged in:** `{st.session_state.username}`")
-    role_label = "HR / Admin" if is_hr() else "Department User"
-    st.caption(f"Role: {role_label}")
+    st.caption(f"Logged in: {st.session_state.username} · {current_role()}")
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state.logged_in = False
         st.session_state.username = ""
         st.session_state.role = ""
+        st.session_state.chat_history = []
+        st.session_state.shared_loaded = False
         st.rerun()
     st.divider()
 
@@ -514,48 +484,63 @@ with st.sidebar:
         st.markdown(f'<span class="status-dot {dot}"></span>{label}', unsafe_allow_html=True)
 
     st.divider()
-    st.markdown("### 📁 Upload Files")
 
-    jd_uploads = st.file_uploader(
-        "Job Descriptions (PDF / TXT / DOCX)",
-        type=["pdf", "txt", "docx"], accept_multiple_files=True,
-        key=f"jd_uploader_{st.session_state.uploader_key}",
-    )
-    cv_uploads = st.file_uploader(
-        "Candidate CVs (PDF / TXT / DOCX)",
-        type=["pdf", "txt", "docx"], accept_multiple_files=True,
-        key=f"cv_uploader_{st.session_state.uploader_key}",
-    )
+    jd_uploads = []
+    cv_uploads = []
 
-    st.divider()
+    if is_hr():
+        st.markdown("### 📁 Upload Files")
 
-    if st.button("⚙️ Load & Preprocess", use_container_width=True, type="primary"):
-        if not jd_uploads or not cv_uploads:
-            st.warning("⚠️ Upload at least one JD and one CV first.")
-        else:
-            # ── Input validation ──
-            val_warnings = backend.validate_uploads(jd_uploads, cv_uploads)
-            if val_warnings:
-                for w in val_warnings:
-                    st.warning(f"⚠️ {w}")
-                st.stop()
-            with st.spinner("Reading and preprocessing files…"):
-                loaded = backend.load_and_preprocess_files(jd_uploads, cv_uploads)
-            if loaded["errors"]:
-                for e in loaded["errors"]:
-                    st.error(e)
+        jd_uploads = st.file_uploader(
+            "Job Descriptions (PDF / TXT / DOCX)",
+            type=["pdf", "txt", "docx"], accept_multiple_files=True,
+            key=f"jd_uploader_{st.session_state.uploader_key}",
+        )
+        cv_uploads = st.file_uploader(
+            "Candidate CVs (PDF / TXT / DOCX)",
+            type=["pdf", "txt", "docx"], accept_multiple_files=True,
+            key=f"cv_uploader_{st.session_state.uploader_key}",
+        )
+
+        st.divider()
+
+        if st.button("⚙️ Load & Preprocess", use_container_width=True, type="primary"):
+            if not jd_uploads or not cv_uploads:
+                st.warning("⚠️ Upload at least one JD and one CV first.")
             else:
-                st.session_state.update({
-                    "jd_files":     loaded["jd_files"],
-                    "raw_jd_texts": loaded["raw_jd_texts"],
-                    "cv_files":     loaded["cv_files"],
-                    "raw_cv_texts": loaded["raw_cv_texts"],
-                    "results":      {},
-                    "analysis_done": False,
-                    "files_loaded": True,
-                })
-                st.success(f"✅ {len(loaded['jd_files'])} JD(s) · {len(loaded['cv_files'])} CV(s) loaded")
-
+                val_warnings = backend.validate_uploads(jd_uploads, cv_uploads)
+                if val_warnings:
+                    for w in val_warnings:
+                        st.warning(f"⚠️ {w}")
+                    st.stop()
+                with st.spinner("Reading and preprocessing files…"):
+                    loaded = backend.load_and_preprocess_files(jd_uploads, cv_uploads)
+                if loaded["errors"]:
+                    for e in loaded["errors"]:
+                        st.error(e)
+                else:
+                    st.session_state.update({
+                        "jd_files":     loaded["jd_files"],
+                        "raw_jd_texts": loaded["raw_jd_texts"],
+                        "cv_files":     loaded["cv_files"],
+                        "raw_cv_texts": loaded["raw_cv_texts"],
+                        "results":      {},
+                        "analysis_done": False,
+                        "files_loaded": True,
+                    })
+                    st.success(f"✅ {len(loaded['jd_files'])} JD(s) · {len(loaded['cv_files'])} CV(s) loaded")
+    else:
+        st.markdown("### 👀 Department View")
+        st.info("Department users do not upload CVs. HR uploads and runs screening, then shared anonymised results appear here.")
+        if st.button("🔄 Load HR-shared results", use_container_width=True):
+            shared = backend.load_department_results()
+            if shared:
+                st.session_state.results = shared
+                st.session_state.analysis_done = True
+                st.session_state.files_loaded = False
+                st.success("Loaded shared anonymised results from HR.")
+            else:
+                st.warning("No shared results found yet. Ask HR to run screening first.")
     if st.session_state.files_loaded:
         n_jd = len(st.session_state.jd_files)
         n_cv = len(st.session_state.cv_files)
@@ -565,18 +550,17 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### ⚙️ Options")
-    if is_department():
-        st.session_state.anonymise = True
-        st.markdown('<div class="info-box">🕵️ Department mode — anonymisation is forced ON. Full candidate details are hidden.</div>', unsafe_allow_html=True)
-    else:
+    if is_hr():
         st.session_state.anonymise = st.toggle(
             "🕵️ Anonymise CVs",
             value=st.session_state.anonymise,
             help="Strips names, emails, universities and pronouns from CVs before screening to reduce bias.",
         )
         if st.session_state.anonymise:
-            st.markdown('<div class="info-box">🕵️ Anonymisation ON — names, emails, universities and pronouns will be hidden from the AI.</div>', unsafe_allow_html=True)
-
+            st.markdown('<div class="info-box">🕵️ Anonymisation ON — department-safe results will hide candidate identifiers.</div>', unsafe_allow_html=True)
+    else:
+        st.session_state.anonymise = True
+        st.markdown('<div class="info-box">🕵️ Department users always view anonymised/shared-safe results only.</div>', unsafe_allow_html=True)
     st.divider()
     st.markdown("### 🗑️ Reset")
     st.caption("Fully wipes all loaded data and results.")
@@ -587,18 +571,12 @@ with st.sidebar:
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.divider()
-    st.caption(f"TalentLens v6 · FAISS RAG · Qwen3-32B · backend {backend.VERSION}")
+    st.caption(f"TalentLens v7 · FAISS RAG · Qwen3-32B · backend {backend.VERSION}")
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
-if is_hr():
-    tab_run, tab_res, tab_matrix, tab_chat, tab_users = st.tabs(
-        ["🚀 Run Screening", "📊 Results", "🗂️ Compare Matrix", "💬 Chat", "👥 User Management"]
-    )
-else:
-    tab_run, tab_res, tab_matrix, tab_chat = st.tabs(
-        ["🚀 Run Screening", "📊 Results", "🗂️ Compare Matrix", "💬 Chat"]
-    )
-    tab_users = None
+tab_run, tab_res, tab_matrix, tab_chat, tab_users = st.tabs(
+    ["🚀 Run Screening", "📊 Results", "🗂️ Compare Matrix", "💬 Chat", "👥 User Management"]
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — RUN SCREENING
@@ -606,7 +584,9 @@ else:
 with tab_run:
     st.markdown("## CV Screening")
 
-    if not st.session_state.groq_key:
+    if not is_hr():
+        st.info("Department users cannot upload original CVs or run new screenings. HR must run screening first, then department users can view shared anonymised results in the Results/Chat tabs.")
+    elif not st.session_state.groq_key:
         st.markdown('<div class="warn-box">👈 <strong>Step 1:</strong> Add your Groq API key in the sidebar.</div>', unsafe_allow_html=True)
     elif not st.session_state.files_loaded:
         st.markdown('<div class="info-box">👈 <strong>Step 2:</strong> Upload files then click <strong>Load &amp; Preprocess</strong>.</div>', unsafe_allow_html=True)
@@ -615,11 +595,11 @@ with tab_run:
         with col_jd:
             st.markdown("**📄 Job Descriptions**")
             for n in st.session_state.jd_files:
-                st.markdown(f'<div class="file-pill"><span>📄</span><span class="file-pill-name">{display_cv_name(n)}</span><span class="file-pill-size">{len(st.session_state.raw_jd_texts[n]):,} chars</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="file-pill"><span>📄</span><span class="file-pill-name">{fmt_name(n)}</span><span class="file-pill-size">{len(st.session_state.raw_jd_texts[n]):,} chars</span></div>', unsafe_allow_html=True)
         with col_cv:
             st.markdown("**👤 Candidate CVs**")
             for n in st.session_state.cv_files:
-                st.markdown(f'<div class="file-pill"><span>👤</span><span class="file-pill-name">{display_cv_name(n)}</span><span class="file-pill-size">{len(st.session_state.raw_cv_texts[n]):,} chars</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="file-pill"><span>👤</span><span class="file-pill-name">{fmt_name(n)}</span><span class="file-pill-size">{len(st.session_state.raw_cv_texts[n]):,} chars</span></div>', unsafe_allow_html=True)
 
         st.divider()
 
@@ -642,7 +622,7 @@ with tab_run:
                     help="Shows the anonymised CV text that will be sent to the AI. Use this to verify PII has been removed.",
                 )
                 if show_anon_preview:
-                    st.caption("Preview of anonymised CV text. Page view is easier to inspect and can be selected/copied; LLM view shows the compact processed text used for screening.")
+                    st.caption("Preview of anonymised CV text. Page view is easier to inspect; LLM view shows the compact processed text used for screening.")
                     for name in st.session_state.cv_files:
                         raw = st.session_state.raw_cv_texts.get(name, "")
                         anon_page = backend.anonymise_text(raw).strip() if raw else "(no raw text available)"
@@ -679,34 +659,27 @@ with tab_run:
                 prog.progress(step / total, text=f"({step}/{total}) Scoring {fmt_name(cv_name)} for {fmt_name(jd_name)}…")
 
             try:
-                screen_cv_files = st.session_state.cv_files
-                screen_raw_cv_texts = st.session_state.raw_cv_texts
-                screen_anonymise = st.session_state.anonymise
-
-                # Department users should not pass real filenames/details into the LLM.
-                # Use generic candidate labels and force anonymisation.
-                if is_department():
-                    alias_map = {name: f"Candidate_{i+1}" for i, name in enumerate(st.session_state.cv_files.keys())}
-                    screen_cv_files = {alias_map[name]: text for name, text in st.session_state.cv_files.items()}
-                    screen_raw_cv_texts = {alias_map[name]: st.session_state.raw_cv_texts[name] for name in st.session_state.cv_files if name in st.session_state.raw_cv_texts}
-                    screen_anonymise = True
-
                 all_results = backend.screen_candidates(
                     jd_files=st.session_state.jd_files,
-                    cv_files=screen_cv_files,
+                    cv_files=st.session_state.cv_files,
                     groq_key=st.session_state.groq_key,
                     use_rag=use_rag,
-                    anonymise=screen_anonymise,
+                    anonymise=st.session_state.anonymise,
                     delay=int(delay),
                     progress_callback=progress_cb,
-                    raw_cv_files=screen_raw_cv_texts,
+                    raw_cv_files=st.session_state.raw_cv_texts,
                 )
                 prog.empty()
                 st.session_state.results       = all_results
                 st.session_state.analysis_done = True
+                try:
+                    backend.save_department_results(all_results)
+                    st.toast("Shared anonymised department results saved.")
+                except Exception as save_err:
+                    st.warning(f"Screening finished, but shared department results could not be saved: {save_err}")
                 first_jd = list(all_results.keys())[0]
                 best     = all_results[first_jd][0]
-                st.markdown(f'<div class="success-box">✅ Screening complete! Top candidate: <strong>{display_cv_name(best["cv_name"])}</strong> — Score: <strong>{best["score"]}/10</strong>. Open <strong>Results</strong> or <strong>Compare Matrix</strong> tab.</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="success-box">✅ Screening complete! Top candidate: <strong>{fmt_name(best["cv_name"])}</strong> — Score: <strong>{best["score"]}/10</strong>. Open <strong>Results</strong> or <strong>Compare Matrix</strong> tab.</div>', unsafe_allow_html=True)
             except Exception as e:
                 prog.empty()
                 st.error(f"❌ Screening failed: {e}")
@@ -718,7 +691,10 @@ with tab_res:
     st.markdown("## 📊 Results")
 
     if not st.session_state.analysis_done:
-        st.markdown('<div class="warn-box">⚠️ No results yet — run screening first.</div>', unsafe_allow_html=True)
+        if is_hr():
+            st.markdown('<div class="warn-box">⚠️ No results yet — run screening first.</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="warn-box">⚠️ No shared HR screening results yet. Ask HR to run screening first, then click Load HR-shared results.</div>', unsafe_allow_html=True)
     else:
         res_dict = st.session_state.results
         jd_names = list(res_dict.keys())
@@ -755,26 +731,28 @@ with tab_res:
             verdict, vcls = verdict_label(best["score"])
             color   = score_color(best["score"])
             rec     = extract_recommendation(best.get("output", ""))
+            small_open = '<small style="opacity:0.8">'
+            small_close = '</small>'
+            summary_html = f"{small_open}{best['summary']}{small_close}" if best.get("summary") else ""
             st.markdown(
                 f'<div class="card-hero">'
                 f'<span class="best-badge">⭐ Best Match</span>&nbsp;&nbsp;{rec_badge(rec)}<br>'
-                f'<span style="font-size:1.4rem;font-weight:800">{display_cv_name(best["cv_name"])}</span>'
+                f'<span style="font-size:1.4rem;font-weight:800">{fmt_name(best["cv_name"])}</span>'
                 f'&nbsp;<span style="opacity:0.5;font-size:0.9rem">Score: <span style="color:{color};font-weight:700">{best["score"]}/10</span></span><br>'
-                f'<span class="verdict {vcls}">{verdict}</span>'
+                f'<span class="verdict {vcls}">{verdict}</span><br>'
+                f'{summary_html}'
                 f'</div>', unsafe_allow_html=True
             )
-            if best.get("summary"):
-                st.info(shorten_text(best["summary"], 420))
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CVs Shown",     len(filtered))
             m2.metric("Best Score",    f"{max(scores):.1f}/10" if scores else "—")
             m3.metric("Avg Score",     f"{sum(scores)/len(scores):.1f}/10" if scores else "—")
-            m4.metric("Top Candidate", display_cv_name(jd_res[0]["cv_name"]) if jd_res else "—")
+            m4.metric("Top Candidate", fmt_name(jd_res[0]["cv_name"]) if jd_res else "—")
 
             st.divider()
             st.markdown("**Score Comparison**")
             chart_data = pd.DataFrame({
-                "Candidate": [display_cv_name(r["cv_name"]) for r in filtered],
+                "Candidate": [fmt_name(r["cv_name"]) for r in filtered],
                 "Score /10": [r["score"] if r["score"] is not None else 0 for r in filtered],
             }).set_index("Candidate")
             st.bar_chart(chart_data, color="#3b82f6")
@@ -790,7 +768,7 @@ with tab_res:
                 score_str     = f"{r['score']}/10" if r["score"] is not None else "N/A"
                 mode_badge    = f'<span style="font-size:11px;opacity:0.45;padding:2px 8px;border-radius:10px;border:1px solid rgba(148,163,184,0.25)">{r.get("mode","")}</span>'
 
-                with st.expander(f"{rank_icon}  {display_cv_name(r['cv_name'])}  —  {score_str}", expanded=(i == 0)):
+                with st.expander(f"{rank_icon}  {fmt_name(r['cv_name'])}  —  {score_str}", expanded=(i == 0)):
                     left, right = st.columns([3, 1])
 
                     with left:
@@ -817,57 +795,26 @@ with tab_res:
                             st.progress(float(r["score"]) / 10.0)
 
                     with st.expander("📋 Full AI Evaluation"):
-                        clean = clean_ai_report(r.get("output", ""))
+                        clean = clean_ai_report(r["output"])
                         st.markdown(clean)
-                        st.download_button(
-                            "⬇️ Download this report",
-                            clean,
-                            file_name=f"talentlens_{Path(r['cv_name']).stem}_report.txt",
-                            mime="text/plain",
-                            key=f"download_report_{sel_jd}_{r['cv_name']}",
-                        )
 
-                    if r.get("rag_evidence"):
-                        with st.expander("🔎 Explainability: Retrieved RAG Evidence"):
-                            st.caption("These are the exact resume chunks retrieved by FAISS and sent to the LLM for this candidate.")
-                            for chunk_i, chunk in enumerate(r.get("rag_evidence", []), start=1):
-                                st.markdown(f"**Chunk {chunk_i}**")
-                                st.text_area("", chunk, height=120, key=f"rag_{sel_jd}_{r['cv_name']}_{chunk_i}", label_visibility="collapsed")
-
-                    if is_hr():
-                        with st.expander("📝 HR Feedback / Score Correction"):
-                            fb_key = f"{sel_jd}::{r['cv_name']}"
-                            saved = st.session_state.hr_feedback.get(fb_key, {})
-                            corrected_score = st.slider(
-                                "Corrected score", 0.0, 10.0,
-                                float(saved.get("corrected_score", r["score"] if r["score"] is not None else 0.0)),
-                                0.5, key=f"score_{fb_key}"
-                            )
-                            corrected_rec = st.selectbox(
-                                "Corrected recommendation", ["Advance", "Hold", "Reject"],
-                                index=["Advance", "Hold", "Reject"].index(saved.get("corrected_recommendation", extract_recommendation(r.get("output", "")) or "Hold")),
-                                key=f"rec_{fb_key}"
-                            )
-                            note = st.text_area("HR feedback note", value=saved.get("feedback_note", ""), key=f"note_{fb_key}")
-                            if st.button("Save HR feedback", key=f"save_{fb_key}"):
-                                st.session_state.hr_feedback[fb_key] = {
-                                    "job_description": sel_jd,
-                                    "candidate": r["cv_name"],
-                                    "original_score": r["score"],
-                                    "corrected_score": corrected_score,
-                                    "corrected_recommendation": corrected_rec,
-                                    "feedback_note": note,
-                                }
-                                st.success("HR feedback saved.")
-
-            if is_hr() and st.session_state.hr_feedback:
-                fb_df = pd.DataFrame(list(st.session_state.hr_feedback.values()))
-                st.download_button("⬇️ Download HR Feedback CSV", fb_df.to_csv(index=False),
-                                   file_name="talentlens_hr_feedback.csv", mime="text/csv", use_container_width=True)
+                    if r.get("rag_context"):
+                        with st.expander("🔎 Retrieved RAG Evidence"):
+                            chunks = [c.strip() for c in r.get("rag_context", "").split("\n\n") if c.strip()]
+                            for ci, chunk in enumerate(chunks, start=1):
+                                st.markdown(f"**Chunk {ci}**")
+                                st.text_area(
+                                    f"RAG chunk {ci}",
+                                    value=chunk[:2000],
+                                    height=140,
+                                    label_visibility="collapsed",
+                                    disabled=False,
+                                    key=f"rag_{sel_jd}_{r['cv_name']}_{ci}",
+                                )
 
             st.divider()
             rows = [{
-                "Rank": i+1, "Candidate": display_cv_name(r["cv_name"]), "File": r["cv_name"],
+                "Rank": i+1, "Candidate": fmt_name(r["cv_name"]), "File": r["cv_name"],
                 "Score /10": r["score"], "Verdict": verdict_label(r["score"])[0],
                 "Recommendation": extract_recommendation(r.get("output", "")),
                 "Mode": r.get("mode",""), "Summary": (r.get("summary") or "")[:200],
@@ -878,9 +825,7 @@ with tab_res:
 
             # ── EMAIL SHORTLISTING ────────────────────────────────────────────
             st.divider()
-            if not is_hr():
-                st.info("Email shortlisting is only available to HR users because it may reveal/contact candidates.")
-            else:
+            if is_hr():
                 st.markdown("### ✉️ Email Shortlisting")
                 st.caption("Tick candidates to shortlist, then generate a personalised interview invitation email for each.")
 
@@ -892,7 +837,7 @@ with tab_res:
                 st.markdown("**Select candidates to shortlist:**")
                 for r in filtered:
                     checked = st.checkbox(
-                        f"{display_cv_name(r['cv_name'])}  —  {r['score']}/10",
+                        f"{fmt_name(r['cv_name'])}  —  {r['score']}/10",
                         key=f"sl_{r['cv_name']}",
                     )
                     if checked:
@@ -905,11 +850,11 @@ with tab_res:
                             st.warning("Please enter a job title first.")
                         else:
                             for cv_name in shortlisted:
-                                with st.spinner(f"Generating email for {display_cv_name(cv_name)}…"):
+                                with st.spinner(f"Generating email for {fmt_name(cv_name)}…"):
                                     try:
                                         email_text = backend.generate_shortlist_email(
                                             groq_key=st.session_state.groq_key,
-                                            candidate_name=display_cv_name(cv_name),
+                                            candidate_name=fmt_name(cv_name),
                                             job_title=job_title.strip(),
                                             company_name=company_name.strip() or "our company",
                                             extra_notes=extra_notes.strip(),
@@ -924,97 +869,14 @@ with tab_res:
                                                 body_lines.append(line)
                                         body = "\n".join(body_lines).strip()
 
-                                        with st.expander(f"✉️ Email for {display_cv_name(cv_name)}", expanded=True):
+                                        with st.expander(f"✉️ Email for {fmt_name(cv_name)}", expanded=True):
                                             if subject:
                                                 st.markdown(f"**Subject:** {subject}")
                                             st.text_area("Email body (copy this)", body, height=220, key=f"email_{cv_name}")
                                     except Exception as e:
-                                        st.error(f"Failed to generate email for {display_cv_name(cv_name)}: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB — USER MANAGEMENT (HR ONLY)
-# ══════════════════════════════════════════════════════════════════════════════
-if tab_users is not None:
-    with tab_users:
-        st.markdown("## 👥 User Management")
-        st.caption("Prototype account setup for role-based access control. HR/Admin users can create HR or Department accounts from the website.")
-
-        users = load_users()
-
-        st.markdown("### Existing Accounts")
-        user_rows = [
-            {"Username": username, "Role": info.get("role", "")}
-            for username, info in users.items()
-        ]
-        st.dataframe(pd.DataFrame(user_rows), use_container_width=True, hide_index=True)
-
-        st.divider()
-        st.markdown("### Create New Account")
-        with st.form("create_account_form"):
-            new_username = st.text_input("New username", placeholder="e.g. hiring_manager_1")
-            new_password = st.text_input("Temporary password", type="password")
-            new_role = st.selectbox("Role", ["HR", "DEPARTMENT"], format_func=lambda x: "HR / Admin" if x == "HR" else "Department User")
-            create_submitted = st.form_submit_button("Create Account", type="primary", use_container_width=True)
-
-        if create_submitted:
-            uname = new_username.strip()
-            if not uname:
-                st.error("Username cannot be empty.")
-            elif not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", uname):
-                st.error("Username must be 3-32 characters and only use letters, numbers, dot, underscore or dash.")
-            elif uname in users:
-                st.error("That username already exists.")
-            elif len(new_password) < 4:
-                st.error("Password must be at least 4 characters for this prototype.")
+                                        st.error(f"Failed to generate email for {fmt_name(cv_name)}: {e}")
             else:
-                users[uname] = {"password": new_password, "role": new_role}
-                save_users(users)
-                st.success(f"Created {new_role} account: {uname}")
-                st.rerun()
-
-        st.divider()
-        st.markdown("### Manage Accounts")
-        editable_users = list(users.keys())
-        selected_user = st.selectbox("Select user", editable_users, key="manage_user_select")
-        if selected_user:
-            c1, c2 = st.columns(2)
-            with c1:
-                reset_password = st.text_input("New password", type="password", key="reset_password_input")
-                if st.button("Reset Password", use_container_width=True):
-                    if len(reset_password) < 4:
-                        st.error("Password must be at least 4 characters.")
-                    else:
-                        users[selected_user]["password"] = reset_password
-                        save_users(users)
-                        st.success(f"Password reset for {selected_user}.")
-                        st.rerun()
-            with c2:
-                new_role_for_user = st.selectbox(
-                    "Change role", ["HR", "DEPARTMENT"],
-                    index=0 if users[selected_user].get("role") == "HR" else 1,
-                    key="role_change_select",
-                    format_func=lambda x: "HR / Admin" if x == "HR" else "Department User",
-                )
-                if st.button("Update Role", use_container_width=True):
-                    users[selected_user]["role"] = new_role_for_user
-                    save_users(users)
-                    st.success(f"Updated {selected_user} to {new_role_for_user}.")
-                    st.rerun()
-
-            if selected_user == st.session_state.username:
-                st.info("You cannot delete the account you are currently logged in with.")
-            else:
-                if st.button("🗑️ Delete Selected Account", use_container_width=True):
-                    users.pop(selected_user, None)
-                    save_users(users)
-                    st.warning(f"Deleted account: {selected_user}")
-                    st.rerun()
-
-        st.markdown(
-            '<div class="warn-box">Prototype note: accounts are stored in <code>users.json</code>. '
-            'For a real production system, use a database with hashed passwords and proper authentication.</div>',
-            unsafe_allow_html=True,
-        )
+                st.info("Email shortlisting is HR-only. Department users can review anonymised results and use the chatbot/feedback workflow.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — COMPARE MATRIX
@@ -1054,7 +916,7 @@ with tab_matrix:
             avg_str = f"{avg_val:.1f}" if avg_val is not None else "—"
             avg_c   = score_color(avg_val)
 
-            row = f'<td><strong>{display_cv_name(cv)}</strong></td>'
+            row = f'<td><strong>{fmt_name(cv)}</strong></td>'
             for jd in jd_cols:
                 r = lookup[cv].get(jd)
                 if r and r["score"] is not None:
@@ -1080,7 +942,7 @@ with tab_matrix:
         matrix_rows = []
         for cv in sorted_cvs:
             sc_list  = [lookup[cv][j]["score"] for j in jd_cols if lookup[cv].get(j) and lookup[cv][j]["score"] is not None]
-            row_data = {"Candidate": display_cv_name(cv)}
+            row_data = {"Candidate": fmt_name(cv)}
             for jd in jd_cols:
                 r = lookup[cv].get(jd)
                 row_data[fmt_name(jd)] = r["score"] if r and r["score"] is not None else ""
@@ -1096,44 +958,17 @@ with tab_matrix:
 with tab_chat:
     st.markdown("## 💬 Ask About Candidates")
     st.caption("Ask anything — CV details, compare candidates, generate interview questions, etc.")
-    st.caption("Chat now uses compact score summaries only, so it should be faster and less likely to freeze on Render free tier.")
 
     if not st.session_state.groq_key:
         st.markdown('<div class="warn-box">👈 Set your Groq API key in the sidebar first.</div>', unsafe_allow_html=True)
     else:
-        def local_best_candidate_answer(question: str):
-            qlow = question.lower().strip()
-            if "best candidate" not in qlow or not st.session_state.results:
-                return None
-            all_rows = []
-            for jd_name, rows in st.session_state.results.items():
-                for row in rows:
-                    if row.get("score") is not None:
-                        all_rows.append((jd_name, row))
-            if not all_rows:
-                return None
-            jd_name, best = max(all_rows, key=lambda x: x[1].get("score") or 0)
-            name = display_cv_name(best.get("cv_name", "Candidate"))
-            score = best.get("score")
-            summary = shorten_text(best.get("summary") or best.get("output", ""), 350)
-            gaps = shorten_text(best.get("gaps") or "No major gaps extracted.", 180)
-            return (
-                f"**Best candidate:** {name} for **{fmt_name(jd_name)}** with a score of **{score}/10**.\n\n"
-                f"**Why:** {summary}\n\n"
-                f"**Main gaps to note:** {gaps}"
-            )
-
         def run_chat_llm(question: str):
-            quick_local = local_best_candidate_answer(question)
-            if quick_local:
-                st.session_state.chat_history.append({"role": "assistant", "content": quick_local})
-                return
             context = backend.build_chat_context(
-                raw_jd_texts=st.session_state.raw_jd_texts,
-                raw_cv_texts={},
+                raw_jd_texts=st.session_state.raw_jd_texts if is_hr() else {},
+                raw_cv_texts=st.session_state.raw_cv_texts if is_hr() else {},
                 results=st.session_state.results,
             )
-            recent_history = st.session_state.chat_history[-4:]
+            recent_history = st.session_state.chat_history[-8:]
             try:
                 reply = backend.ask_about_candidates(
                     groq_key=st.session_state.groq_key,
@@ -1201,3 +1036,68 @@ with tab_chat:
             if st.button("🗑️ Clear Chat History", use_container_width=False):
                 st.session_state.chat_history = []
                 st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — USER MANAGEMENT
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_users:
+    st.markdown("## 👥 User Management")
+    if not is_hr():
+        st.info("Only HR users can create or manage accounts.")
+    else:
+        users = load_users()
+        st.caption("Prototype account management. For production, passwords should be hashed and stored in a database.")
+
+        with st.expander("➕ Create Account", expanded=True):
+            c1, c2, c3 = st.columns([2, 2, 2])
+            with c1:
+                new_username = st.text_input("New username", key="new_user_name")
+            with c2:
+                new_password = st.text_input("New password", type="password", key="new_user_pw")
+            with c3:
+                new_role = st.selectbox("Role", ["HR", "DEPARTMENT"], key="new_user_role")
+            if st.button("Create Account", type="primary", use_container_width=True):
+                if not new_username.strip() or not new_password:
+                    st.warning("Enter both username and password.")
+                elif new_username.strip() in users:
+                    st.warning("That username already exists.")
+                else:
+                    users[new_username.strip()] = {"password": new_password, "role": new_role}
+                    save_users(users)
+                    st.success(f"Created {new_role} account: {new_username.strip()}")
+                    st.rerun()
+
+        st.markdown("### Existing Accounts")
+        table_rows = [{"Username": u, "Role": info.get("role", "DEPARTMENT")} for u, info in users.items()]
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("### Update / Delete Account")
+        selected_user = st.selectbox("Select account", list(users.keys()))
+        if selected_user:
+            c1, c2 = st.columns(2)
+            with c1:
+                reset_pw = st.text_input("New password", type="password", key="reset_pw")
+                if st.button("Reset Password", use_container_width=True):
+                    if reset_pw:
+                        users[selected_user]["password"] = reset_pw
+                        save_users(users)
+                        st.success("Password updated.")
+                        st.rerun()
+                    else:
+                        st.warning("Enter a new password first.")
+            with c2:
+                updated_role = st.selectbox("Change role", ["HR", "DEPARTMENT"], index=0 if users[selected_user].get("role") == "HR" else 1, key="role_change")
+                if st.button("Update Role", use_container_width=True):
+                    users[selected_user]["role"] = updated_role
+                    save_users(users)
+                    st.success("Role updated.")
+                    st.rerun()
+            if selected_user not in DEFAULT_USERS:
+                if st.button("🗑️ Delete Account", use_container_width=True):
+                    users.pop(selected_user, None)
+                    save_users(users)
+                    st.success("Account deleted.")
+                    st.rerun()
+            else:
+                st.caption("Default demo accounts cannot be deleted.")

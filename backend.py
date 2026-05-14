@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import time
 import tempfile
@@ -13,13 +14,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
-# Stable deployment note:
-# spaCy/NER is intentionally disabled in this Render-free-tier build because it
-# made the app slow/heavy. Regex anonymisation remains active for emails, phones,
-# addresses, institutions, DOB, emergency contacts and sensitive labels.
-# NER can be presented as a future enhancement or enabled later on a stronger host.
-
-VERSION = "v3.6-stable-lite"  # bump this when you redeploy to confirm Render picked up the new file
+VERSION = "v3.7-hr-shared-results"  # bump this when you redeploy to confirm Render picked up the new file
 
 QWEN_MODEL = "qwen/qwen3-32b"
 FINAL_CHUNK_SIZE = 700
@@ -183,39 +178,19 @@ def extract_score(text: str):
 
 
 def extract_section(text: str, names: List[str]) -> str:
-    """Extract a short section from an LLM report without swallowing the full report.
-
-    Supports headings written as `Candidate Summary:`, `**Candidate Summary**`,
-    or `### Candidate Summary`. The returned text is flattened only after the
-    correct section boundary is found, so the result card stays short.
-    """
     if not isinstance(text, str):
         return ""
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
-
-    all_headings = [
-        "Candidate Summary", "Must-Have Skills Match", "Nice-to-Have Skills Match",
-        "Experience Assessment", "Key Gaps", "Suitability Score", "Scoring rationale",
-        "Recommendation", "Matching Skills", "Missing / Weak Areas", "Missing Areas", "Weak Areas",
-        "Overall Score", "Final Score",
-    ]
-
-    def heading_regex(label: str) -> str:
-        return rf"(?:^|\n|\s{{2,}})\s*(?:[#>*_\-\s]*)\**\s*{re.escape(label)}\s*\**\s*[:\-–]?"
-
-    target = "|".join(heading_regex(n) for n in names)
-    next_heads = "|".join(heading_regex(h) for h in all_headings if h not in names)
-    pattern = rf"(?is)({target})\s*(.*?)(?=({next_heads})|\Z)"
+    escaped = [re.escape(n) for n in names]
+    pattern = (
+        r"(?is)(?:^|\n)\s*(%s)\s*:\s*(.*?)"
+        r"(?=\n\s*(?:Candidate Summary|Matching Skills|Missing\s*/\s*Weak Areas"
+        r"|Missing Areas|Weak Areas|Suitability Score|Overall Score|Final Score)\s*:|\Z)"
+    ) % "|".join(escaped)
     m = re.search(pattern, cleaned)
     if not m:
         return ""
-
-    section = m.group(2).strip(" -:\n\t")
-    # Remove markdown table separators from short cards; full report is kept separately.
-    section = re.sub(r"\|?\s*-{3,}\s*\|?", " ", section)
-    section = re.sub(r"\s+", " ", section).strip()
-    return section[:700]
+    return re.sub(r"\s+", " ", m.group(2)).strip(" -\n\t")
 
 
 def fmt_name(filename: str) -> str:
@@ -300,21 +275,13 @@ def _build_chunks(cv_files: Dict[str, str]):
     return splitter.split_documents(documents)
 
 
-def _get_rag_context_and_evidence(chunks, emb, cv_name: str, query: str):
-    """Return the RAG context plus the exact retrieved chunks for explainability."""
+def _get_rag_context(chunks, emb, cv_name: str, query: str) -> str:
     cand_chunks = [c for c in chunks if c.metadata.get("source") == cv_name]
     if not cand_chunks:
-        return "", []
+        return ""
     vectorstore = FAISS.from_documents(cand_chunks, emb)
     retriever = vectorstore.as_retriever(search_kwargs={"k": min(FINAL_K, len(cand_chunks))})
-    docs = retriever.invoke(query)
-    evidence = [d.page_content for d in docs]
-    return "\n\n".join(evidence), evidence
-
-
-def _get_rag_context(chunks, emb, cv_name: str, query: str) -> str:
-    context, _ = _get_rag_context_and_evidence(chunks, emb, cv_name, query)
-    return context
+    return "\n\n".join(d.page_content for d in retriever.invoke(query))
 
 
 def _call_llm(client: Groq, prompt: str, retries: int = 3, base_delay: float = 5.0) -> str:
@@ -576,24 +543,12 @@ def _redact_header_names(text: str, max_lines: int = 14) -> str:
     return "\n".join(lines)
 
 
-_NLP = None
-
-def get_ner_model():
-    """NER disabled for stable Render deployment."""
-    return None
-
-
-def _apply_ner_anonymisation(text: str) -> str:
-    """No-op in stable build. Regex anonymisation handles the deployed prototype."""
-    return text
-
-
 def anonymise_text(text: str) -> str:
-    """Strip PII from a CV using lightweight regex rules.
+    """Strip PII from a CV so the LLM scores on skills and experience.
 
-    This stable version removes clear PII while keeping job-relevant content such
-    as degrees, technical skills, awards, job titles, company names, tools, and
-    project descriptions. NER is disabled in deployment to keep Render fast.
+    This version is intentionally conservative: it removes clear PII while keeping
+    job-relevant content such as degrees, technical skills, awards, job titles,
+    company names, tools, and project descriptions.
     """
     if not isinstance(text, str):
         text = str(text)
@@ -625,7 +580,6 @@ def anonymise_text(text: str) -> str:
 
     # 5. Institutions and demographics
     text = _INSTITUTION.sub("[Institution]", text)
-    text = _apply_ner_anonymisation(text)
     text = _DOB.sub("[dob]", text)
     text = _MARITAL.sub("[marital-status]", text)
     text = _LANGUAGE.sub("[language]", text)
@@ -639,66 +593,6 @@ def anonymise_text(text: str) -> str:
 MIN_CV_CHARS  = 200   # anything shorter is probably a blank/corrupt file
 MIN_JD_CHARS  = 100
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
-
-
-def _keyword_score(text: str, weighted_keywords) -> int:
-    """Score simple keyword/section matches for upload-type validation."""
-    t = (text or "").lower()
-    score = 0
-    for keyword, weight in weighted_keywords:
-        if keyword in t:
-            score += weight
-    return score
-
-
-def classify_uploaded_document(filename: str, text: str) -> Dict[str, Any]:
-    """Heuristically classify an uploaded file as likely CV, likely JD, or unknown.
-
-    This is a user-error safety check only. It avoids LLM/API calls and uses
-    section keywords that commonly appear in CVs and job descriptions.
-    """
-    name = (filename or "").lower()
-    t = (text or "").lower()
-
-    cv_keywords = [
-        ("curriculum vitae", 5), ("resume", 5), ("contact", 3), ("mobile", 3),
-        ("email", 2), ("education", 3), ("work experience", 4),
-        ("professional experience", 4), ("project details", 2), ("skills", 2),
-        ("awards", 2), ("achievements", 2), ("certifications", 2),
-        ("languages", 2), ("objective", 1), ("summary", 1),
-    ]
-    jd_keywords = [
-        ("job description", 5), ("job responsibilities", 5), ("responsibilities", 4),
-        ("requirements", 4), ("required qualifications", 5), ("qualifications", 4),
-        ("specific responsibilities", 4), ("specific qualifications", 4),
-        ("minimum", 2), ("preferred", 2), ("must have", 3),
-        ("candidate should", 3), ("years of experience", 3), ("role", 1),
-    ]
-
-    cv_score = _keyword_score(t, cv_keywords)
-    jd_score = _keyword_score(t, jd_keywords)
-
-    # Filename is a useful signal, but keep it lower than content evidence.
-    if any(k in name for k in ["cv", "resume", "curriculum"]):
-        cv_score += 4
-    if any(k in name for k in ["job description", "jd", "job_", "position", "role"]):
-        jd_score += 3
-
-    likely = "unknown"
-    if cv_score >= 7 and cv_score >= jd_score + 3:
-        likely = "cv"
-    elif jd_score >= 7 and jd_score >= cv_score + 3:
-        likely = "jd"
-
-    return {"likely": likely, "cv_score": cv_score, "jd_score": jd_score}
-
-
-def _safe_read_upload_for_validation(uploaded_file) -> str:
-    """Read uploaded file text for validation without breaking later processing."""
-    try:
-        return read_uploaded_file(uploaded_file)
-    except Exception:
-        return ""
 
 
 def validate_uploads(jd_uploads, cv_uploads):
@@ -734,31 +628,88 @@ def validate_uploads(jd_uploads, cv_uploads):
         elif size > MAX_FILE_SIZE:
             warnings.append(f"'{f.name}' is larger than 5 MB — consider splitting it.")
 
-    # Content-type safety check: detect likely CV/JD uploaded into the wrong slot.
-    # This prevents accidental screening where a resume is treated as the job
-    # description or a job description is treated as a candidate CV.
-    for f in jd_uploads:
-        raw = _safe_read_upload_for_validation(f)
-        cls = classify_uploaded_document(f.name, raw)
-        if cls["likely"] == "cv":
-            warnings.append(
-                f"'{f.name}' looks like a CV/resume but was uploaded under Job Descriptions. "
-                f"Please move it to the Candidate CV uploader. "
-                f"(CV score {cls['cv_score']}, JD score {cls['jd_score']})"
-            )
-
-    for f in cv_uploads:
-        raw = _safe_read_upload_for_validation(f)
-        cls = classify_uploaded_document(f.name, raw)
-        if cls["likely"] == "jd":
-            warnings.append(
-                f"'{f.name}' looks like a Job Description but was uploaded under Candidate CVs. "
-                f"Please move it to the Job Description uploader. "
-                f"(JD score {cls['jd_score']}, CV score {cls['cv_score']})"
-            )
-
     return warnings
 
+
+
+
+def _extract_recommendation_for_share(text: str) -> str:
+    if not text:
+        return ""
+    clean = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    m = re.search(r"Recommendation\*?\*?\s*[:\-–]?\s*(Advance|Hold|Reject)", clean, re.IGNORECASE)
+    return m.group(1).capitalize() if m else ""
+
+
+# ── SHARED DEPARTMENT RESULTS ────────────────────────────────────────────────
+# Prototype storage for HR-to-department handoff. On Render free tier, local
+# files are suitable for demo sessions but may reset after redeploy/restart.
+SHARED_RESULTS_FILE = "department_results.json"
+
+
+def _safe_clean_report(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+
+def make_department_safe_results(results: Dict[str, List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Return a department-safe copy of screening results.
+
+    Real CV filenames are replaced with Candidate 1, Candidate 2, etc. Only the
+    screening report, score, summary, skills, gaps and retrieved RAG evidence are
+    kept. Raw CV text/contact details are never stored here.
+    """
+    if not results:
+        return {}
+
+    alias_map = {}
+    counter = 1
+    safe_results = {}
+    for jd_name, rows in results.items():
+        safe_jd_name = Path(jd_name).stem.replace("_", " ").replace("-", " ")
+        safe_rows = []
+        for row in rows:
+            real_name = row.get("cv_name", "Candidate")
+            if real_name not in alias_map:
+                alias_map[real_name] = f"Candidate {counter}"
+                counter += 1
+            safe_row = {
+                "cv_name": alias_map[real_name],
+                "score": row.get("score"),
+                "output": _safe_clean_report(row.get("output", "")),
+                "summary": row.get("summary", ""),
+                "skills": row.get("skills", ""),
+                "gaps": row.get("gaps", ""),
+                "recommendation": _extract_recommendation_for_share(row.get("output", "")),
+                "mode": row.get("mode", ""),
+                "rag_context": row.get("rag_context", ""),
+            }
+            safe_rows.append(safe_row)
+        safe_results[safe_jd_name] = safe_rows
+    return safe_results
+
+
+def save_department_results(results: Dict[str, List[Dict[str, Any]]], path: str = SHARED_RESULTS_FILE) -> Dict[str, List[Dict[str, Any]]]:
+    safe_results = make_department_safe_results(results)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(safe_results, f, ensure_ascii=False, indent=2)
+    return safe_results
+
+
+def load_department_results(path: str = SHARED_RESULTS_FILE) -> Dict[str, List[Dict[str, Any]]]:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def has_shared_department_results(path: str = SHARED_RESULTS_FILE) -> bool:
+    return os.path.exists(path) and os.path.getsize(path) > 0
 
 def screen_candidates(
     jd_files: Dict[str, str],
@@ -777,7 +728,7 @@ def screen_candidates(
     if not cv_files:
         raise ValueError("No CV files loaded.")
 
-    groq_client = Groq(api_key=groq_key.strip(), timeout=35.0)
+    groq_client = Groq(api_key=groq_key.strip())
 
     # Apply anonymisation to CV text before chunking/screening if requested.
     # IMPORTANT: anonymise_text() must run on the RAW (un-preprocessed) text so
@@ -809,9 +760,8 @@ def screen_candidates(
             if progress_callback:
                 progress_callback(step, total_pairs, jd_name, cv_name)
 
-            rag_evidence = []
             if use_rag:
-                ctx, rag_evidence = _get_rag_context_and_evidence(chunks, emb, cv_name, cleaned_jd[:500])
+                ctx = _get_rag_context(chunks, emb, cv_name, cleaned_jd[:500])
                 prompt = build_rag_prompt(cleaned_jd, cv_name, ctx)
             else:
                 prompt = build_user_prompt(cleaned_jd, cv_name, cleaned_cv)
@@ -829,7 +779,7 @@ def screen_candidates(
                 "skills": extract_section(output, ["Matching Skills"]),
                 "gaps": extract_section(output, ["Missing / Weak Areas", "Missing Areas", "Weak Areas"]),
                 "mode": ("RAG" if use_rag else "Direct") + (" · Anon" if anonymise else ""),
-                "rag_evidence": rag_evidence,
+                "rag_context": ctx if use_rag else "",
             })
             if delay:
                 time.sleep(delay)
@@ -846,9 +796,9 @@ def build_chat_context(raw_jd_texts, raw_cv_texts, results) -> str:
     free-tier per-request limit (~6 000 TPM / ~32 000 token context window).
     Rough budget: context ≤ 1 800 tokens ≈ 7 200 characters."""
 
-    MAX_SUMMARY = 80   # chars per field; keep chat fast/stable
-    MAX_SKILLS  = 70
-    MAX_GAPS    = 70
+    MAX_SUMMARY = 120   # chars per field
+    MAX_SKILLS  = 100
+    MAX_GAPS    = 100
 
     ctx = ""
 
@@ -863,18 +813,10 @@ def build_chat_context(raw_jd_texts, raw_cv_texts, results) -> str:
             ctx += f"  - {name}\n"
 
     if results:
-        ctx += "\n=== SCREENING RESULTS (compact summaries only) ===\n"
-        rows_added = 0
-        max_rows = 20
+        ctx += "\n=== SCREENING RESULTS ===\n"
         for jd_name, rows in results.items():
-            if rows_added >= max_rows:
-                break
             ctx += f"\nJD: {jd_name}\n"
             for row in rows:
-                if rows_added >= max_rows:
-                    ctx += "  ...more results hidden to keep chat fast...\n"
-                    break
-                rows_added += 1
                 score_str = f"{row['score']}/10" if row['score'] is not None else "N/A"
                 verdict   = verdict_label(row['score'])[0]
                 ctx += (
@@ -902,7 +844,7 @@ def generate_shortlist_email(
     if not groq_key or not groq_key.strip():
         raise ValueError("Groq API key is required.")
 
-    client = Groq(api_key=groq_key.strip(), timeout=35.0)
+    client = Groq(api_key=groq_key.strip())
     prompt = (
         f"Write a professional, warm interview invitation email to a candidate.\n\n"
         f"Candidate name: {candidate_name}\n"
@@ -946,7 +888,7 @@ def ask_about_candidates(
     if not groq_key or not groq_key.strip():
         raise ValueError("Groq API key is required.")
 
-    client = Groq(api_key=groq_key.strip(), timeout=35.0)
+    client = Groq(api_key=groq_key.strip())
 
     messages = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT}]
     if context:
@@ -967,7 +909,7 @@ def ask_about_candidates(
         model=QWEN_MODEL,
         messages=messages,
         temperature=0.2,
-        max_tokens=500,
+        max_tokens=1024,
     )
     raw = response.choices[0].message.content
     # Strip any <think>...</think> blocks just in case

@@ -14,7 +14,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
-VERSION = "v3.7-hr-shared-results"  # bump this when you redeploy to confirm Render picked up the new file
+VERSION = "v3.8-dept-ui-polish"  # bump this when you redeploy to confirm Render picked up the new file
 
 QWEN_MODEL = "qwen/qwen3-32b"
 FINAL_CHUNK_SIZE = 700
@@ -178,19 +178,31 @@ def extract_score(text: str):
 
 
 def extract_section(text: str, names: List[str]) -> str:
+    """Extract report sections without destroying markdown layout.
+
+    Handles both old headings like `Candidate Summary:` and newer markdown
+    headings like `**Candidate Summary**`. Returns a short cleaned string for
+    cards/chat context only; the full report remains in `output`.
+    """
     if not isinstance(text, str):
         return ""
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    cleaned = cleaned.replace("\r", "\n")
     escaped = [re.escape(n) for n in names]
-    pattern = (
-        r"(?is)(?:^|\n)\s*(%s)\s*:\s*(.*?)"
-        r"(?=\n\s*(?:Candidate Summary|Matching Skills|Missing\s*/\s*Weak Areas"
-        r"|Missing Areas|Weak Areas|Suitability Score|Overall Score|Final Score)\s*:|\Z)"
-    ) % "|".join(escaped)
-    m = re.search(pattern, cleaned)
+    start = r"(?is)(?:^|\n)\s*\*?\*?(%s)\*?\*?\s*[:\-–]?\s*" % "|".join(escaped)
+    next_heading = (
+        r"(?=\n\s*\*?\*?(?:Candidate Summary|Must-Have Skills Match|Nice-to-Have Skills Match|"
+        r"Matching Skills|Missing\s*/\s*Weak Areas|Missing Areas|Weak Areas|Experience Assessment|"
+        r"Key Gaps|Suitability Score|Overall Score|Final Score|Recommendation)\*?\*?\s*[:\-–]?|\Z)"
+    )
+    m = re.search(start + r"(.*?)" + next_heading, cleaned)
     if not m:
         return ""
-    return re.sub(r"\s+", " ", m.group(2)).strip(" -\n\t")
+    val = m.group(2).strip(" -\n\t")
+    # For cards, avoid returning whole markdown tables as one long line.
+    val = re.sub(r"\s*\|\s*---.*", "", val, flags=re.DOTALL)
+    val = re.sub(r"\s+", " ", val).strip()
+    return val[:700]
 
 
 def fmt_name(filename: str) -> str:

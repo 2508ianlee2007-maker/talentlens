@@ -405,7 +405,25 @@ def is_hr() -> bool:
 def clean_ai_report(text: str) -> str:
     if not isinstance(text, str):
         return ""
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    # Make markdown tables/sections readable when the LLM returns compact separators.
+    text = re.sub(r"\s*\|\s*---\s*\|", "\n|---|", text)
+    text = re.sub(r"\s*\*\*(Candidate Summary|Must-Have Skills Match|Nice-to-Have Skills Match|Experience Assessment|Key Gaps|Suitability Score|Recommendation)\*\*", r"\n\n**\1**", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+def short_display_summary(row: dict, max_chars: int = 360) -> str:
+    """Short, card-friendly summary. Prevents full AI reports from flooding the result card."""
+    raw = row.get("summary") or row.get("output") or ""
+    txt = clean_ai_report(raw)
+    # If extraction failed and the summary contains later report sections, cut at the first section boundary.
+    txt = re.split(r"\n\s*\*\*(?:Must-Have Skills Match|Nice-to-Have Skills Match|Experience Assessment|Key Gaps|Suitability Score|Recommendation)\*\*", txt, maxsplit=1)[0]
+    txt = re.split(r"\s*\|\s*Requirement\s*\|", txt, maxsplit=1)[0]
+    txt = re.sub(r"\*+", "", txt)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    if len(txt) > max_chars:
+        txt = txt[:max_chars].rsplit(" ", 1)[0].rstrip(".,;:") + "…"
+    return txt
 
 # ─── SESSION STATE ─────────────────────────────────────────────────────────────
 _defaults = {
@@ -689,6 +707,8 @@ with tab_run:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_res:
     st.markdown("## 📊 Results")
+    if not is_hr():
+        st.caption("Department view: candidate names and original CV details are hidden. Full reports are kept inside expanders for readability.")
 
     if not st.session_state.analysis_done:
         if is_hr():
@@ -731,18 +751,17 @@ with tab_res:
             verdict, vcls = verdict_label(best["score"])
             color   = score_color(best["score"])
             rec     = extract_recommendation(best.get("output", ""))
-            small_open = '<small style="opacity:0.8">'
-            small_close = '</small>'
-            summary_html = f"{small_open}{best['summary']}{small_close}" if best.get("summary") else ""
+            best_summary = short_display_summary(best)
             st.markdown(
                 f'<div class="card-hero">'
                 f'<span class="best-badge">⭐ Best Match</span>&nbsp;&nbsp;{rec_badge(rec)}<br>'
                 f'<span style="font-size:1.4rem;font-weight:800">{fmt_name(best["cv_name"])}</span>'
                 f'&nbsp;<span style="opacity:0.5;font-size:0.9rem">Score: <span style="color:{color};font-weight:700">{best["score"]}/10</span></span><br>'
-                f'<span class="verdict {vcls}">{verdict}</span><br>'
-                f'{summary_html}'
+                f'<span class="verdict {vcls}">{verdict}</span>'
                 f'</div>', unsafe_allow_html=True
             )
+            if best_summary:
+                st.markdown(f"**Why this candidate is shown first:** {best_summary}")
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CVs Shown",     len(filtered))
             m2.metric("Best Score",    f"{max(scores):.1f}/10" if scores else "—")
@@ -778,8 +797,9 @@ with tab_res:
                         if rec:
                             hdr += f'&nbsp;{rec_badge(rec)}'
                         st.markdown(hdr, unsafe_allow_html=True)
-                        if r.get("summary"):
-                            st.markdown(f"**Summary:** {r['summary']}")
+                        card_summary = short_display_summary(r)
+                        if card_summary:
+                            st.markdown(f"**Summary:** {card_summary}")
                         if r.get("skills"):
                             tags = [s.strip() for s in re.split(r"[,;•\-\n]+", r["skills"]) if s.strip()][:8]
                             st.markdown("**Matching Skills:**")
